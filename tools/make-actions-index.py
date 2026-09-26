@@ -44,6 +44,24 @@ def fields(command, path):
     return subprocess.check_output(args, text=True).splitlines()
 
 
+def deb_package_fields(path):
+    """Read Debian control fields, which dpkg-deb prints as ``Field: value``."""
+    output = subprocess.check_output(
+        ["dpkg-deb", "-f", str(path), "Package", "Version", "Architecture"],
+        text=True,
+    )
+    parsed = {}
+    for line in output.splitlines():
+        name, separator, value = line.partition(":")
+        if not separator or name in parsed:
+            fail("dpkg-deb returned invalid package metadata")
+        parsed[name] = value.strip()
+    required = ("Package", "Version", "Architecture")
+    if any(not parsed.get(name) for name in required):
+        fail("dpkg-deb omitted required package metadata")
+    return tuple(parsed[name] for name in required)
+
+
 def aur_metadata(path):
     with tarfile.open(path, "r:gz") as archive:
         members = [member for member in archive.getmembers() if member.name == "PKGBUILD"]
@@ -85,9 +103,7 @@ def main():
     deb = one(root, "*.deb")
     rpm = one(root, "*.rpm")
     aur = one(root, "tab-companion-arch-source.tar.gz")
-    deb_name, deb_version, deb_arch = fields(
-        ["dpkg-deb", "-f", "{archive}", "Package", "Version", "Architecture"], deb
-    )
+    deb_name, deb_version, deb_arch = deb_package_fields(deb)
     rpm_name, rpm_version, rpm_arch = fields(
         ["rpm", "-qp", "--queryformat", "%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}", "{archive}"], rpm
     )

@@ -16,13 +16,19 @@ class PackageFieldCommandTests(unittest.TestCase):
         expected = [
             "dpkg-deb", "-f", str(archive), "Package", "Version", "Architecture"
         ]
-        with patch.object(INDEX.subprocess, "check_output", return_value="pkg\n1.0\nall\n") as run:
-            values = INDEX.fields(
-                ["dpkg-deb", "-f", "{archive}", "Package", "Version", "Architecture"],
-                archive,
-            )
+        output = "Package: pkg\nVersion: 1.0\nArchitecture: all\n"
+        with patch.object(INDEX.subprocess, "check_output", return_value=output) as run:
+            values = INDEX.deb_package_fields(archive)
         run.assert_called_once_with(expected, text=True)
-        self.assertEqual(values, ["pkg", "1.0", "all"])
+        self.assertEqual(values, ("pkg", "1.0", "all"))
+
+    def test_deb_metadata_rejects_missing_or_malformed_fields(self):
+        for output in ("Package pkg\nVersion: 1.0\nArchitecture: all\n",
+                       "Package: pkg\nVersion: 1.0\n"):
+            with self.subTest(output=output), \
+                    patch.object(INDEX.subprocess, "check_output", return_value=output), \
+                    self.assertRaises(SystemExit):
+                INDEX.deb_package_fields(Path("/tmp/example.deb"))
 
     def test_rpm_archive_remains_after_query_format(self):
         archive = Path("/tmp/example.rpm")

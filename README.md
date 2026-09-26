@@ -1,7 +1,7 @@
 # Tab Companion
 
 GTK app and package updater for Linux on Samsung Galaxy tablets. This
-experimental community project derives from
+experimental project derives from
 [`agcarbajo/ubuntu-galaxy-tab-s9-ultra`](https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra)
 and was produced with substantial AI assistance. It is unofficial; review and
 validate it before use.
