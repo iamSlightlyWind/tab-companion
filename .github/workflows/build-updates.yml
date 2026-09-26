@@ -54,21 +54,17 @@ jobs:
             fedora:44 bash -euc '
               dnf -y install rpm-build tar findutils python3 coreutils
               tools/build-fedora-rpm.sh
+              base_version=$(sed -n "s/^Version: //p" ports/ubuntu-x910/DEBIAN/control | head -n1)
+              pkgrel=$((1000000 + APP_BUILD_RUN_NUMBER))
+              tools/build-aur-source.sh "$base_version" "$pkgrel"
             '
-          # The Fedora container builds as root against the mounted workspace;
-          # return ownership so the following unprivileged AUR bundle build can
-          # write to ports/fedora-x810/out.
-          sudo chown -R "$(id -u):$(id -g)" ports/fedora-x810/out
           mapfile -t packages < <(find ports/fedora-x810/out/rpms -maxdepth 1 -type f -name '*.rpm' -print)
           [[ ${#packages[@]} -eq 1 ]]
           cp "${packages[0]}" build/tab-companion-build/
 
-      - name: Build self-contained Arch AUR update source
+      - name: Stage self-contained Arch AUR update source
         run: |
           set -euo pipefail
-          base_version=$(sed -n 's/^Version: //p' ports/ubuntu-x910/DEBIAN/control | head -n1)
-          pkgrel=$((1000000 + APP_BUILD_RUN_NUMBER))
-          tools/build-aur-source.sh "$base_version" "$pkgrel"
           mapfile -t packages < <(find ports/fedora-x810/out/arch -maxdepth 1 -type f -name 'tab-companion-aur-source.tar.gz' -print)
           [[ ${#packages[@]} -eq 1 ]]
           cp "${packages[0]}" build/tab-companion-build/tab-companion-arch-source.tar.gz
