@@ -1,4 +1,7 @@
 import importlib.util
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -46,6 +49,43 @@ class PackageFieldCommandTests(unittest.TestCase):
             INDEX.fields(["dpkg-deb", "-f", "Package"], Path("x.deb"))
         with self.assertRaisesRegex(SystemExit, "exactly one"):
             INDEX.fields(["rpm", "{archive}", "{archive}"], Path("x.rpm"))
+
+
+class BuildIndexSelectionTests(unittest.TestCase):
+    def make_index(self, target, files):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in files:
+                (root / name).write_bytes(b"test")
+            env = {
+                "APP_BUILD_RUN_ID": "123",
+                "APP_BUILD_RUN_NUMBER": "7",
+                "APP_BUILD_HEAD_SHA": "0123456789abcdef0123456789abcdef01234567",
+                "APP_BUILD_BRANCH": "main",
+            }
+            with patch.object(INDEX.sys, "argv", [str(SCRIPT), str(root), target]), \
+                    patch.dict(os.environ, env, clear=False):
+                if target == "ubuntu":
+                    with patch.object(INDEX, "deb_package_fields",
+                                      return_value=("ubuntu-gts9u-companion", "1.4.2+build.7", "all")):
+                        INDEX.main()
+                else:
+                    with patch.object(INDEX, "fields", return_value=("tab-companion", "1.4.2.7-1000007.fc44", "noarch")), \
+                            patch.object(INDEX, "aur_metadata", return_value={
+                                "pkgname": "tab-companion", "pkgver": "1.4.2", "pkgrel": "1000007",
+                            }):
+                        INDEX.main()
+            return json.loads((root / "tab-companion-update.json").read_text())
+
+    def test_ubuntu_index_contains_only_ubuntu_deb(self):
+        manifest = self.make_index("ubuntu", ["companion.deb"])
+        self.assertEqual([asset["format"] for asset in manifest["assets"]], ["deb"])
+        self.assertEqual(manifest["assets"][0]["target"]["os_id"], "ubuntu")
+
+    def test_fedora_artifact_indexes_fedora_and_arch_packages(self):
+        manifest = self.make_index("fedora", ["companion.rpm", "tab-companion-arch-source.tar.gz"])
+        self.assertEqual([asset["format"] for asset in manifest["assets"]], ["rpm", "aur-source"])
+        self.assertEqual([asset["target"]["os_id"] for asset in manifest["assets"]], ["fedora", "arch"])
 
 
 if __name__ == "__main__":

@@ -83,9 +83,10 @@ def aur_metadata(path):
 
 
 def main():
-    if len(sys.argv) != 2:
-        fail("Usage: tools/make-actions-index.py BUILD_DIRECTORY")
+    if len(sys.argv) != 3 or sys.argv[2] not in ("ubuntu", "fedora"):
+        fail("Usage: tools/make-actions-index.py BUILD_DIRECTORY ubuntu|fedora")
     root = Path(sys.argv[1]).resolve()
+    build_target = sys.argv[2]
     if not root.is_dir():
         fail(f"Build directory does not exist: {root}")
 
@@ -100,22 +101,13 @@ def main():
     if not branch or len(branch) > 255 or any(ord(ch) < 32 for ch in branch):
         fail("Actions branch name is invalid")
 
-    deb = one(root, "*.deb")
-    rpm = one(root, "*.rpm")
-    aur = one(root, "tab-companion-arch-source.tar.gz")
-    deb_name, deb_version, deb_arch = deb_package_fields(deb)
-    rpm_name, rpm_version, rpm_arch = fields(
-        ["rpm", "-qp", "--queryformat", "%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}", "{archive}"], rpm
-    )
-    aur_values = aur_metadata(aur)
-    if deb_arch != "all" or deb_name != "ubuntu-gts9u-companion":
-        fail(f"Unexpected DEB metadata: {deb_name} {deb_version} {deb_arch}")
-    if rpm_arch != "noarch" or rpm_name != "tab-companion":
-        fail(f"Unexpected RPM metadata: {rpm_name} {rpm_version} {rpm_arch}")
-
-    base_version = re.sub(r"[^0-9.].*$", "", deb_version)
+    control = Path("ports/ubuntu-x910/DEBIAN/control")
+    version_match = re.search(r"^Version:\s*(\S+)", control.read_text(encoding="utf-8"), re.MULTILINE)
+    if not version_match:
+        fail(f"Could not read package version from {control}")
+    base_version = re.sub(r"[^0-9.].*$", "", version_match.group(1))
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", base_version):
-        fail(f"Could not derive numeric app version from DEB {deb_version}")
+        fail(f"Could not derive numeric app version from {version_match.group(1)}")
     version = f"{base_version}.{run_number}"
 
     def asset(path, fmt, package_name, package_version, target):
@@ -129,6 +121,34 @@ def main():
             "target": target,
         }
 
+    assets = []
+    if build_target == "ubuntu":
+        deb = one(root, "*.deb")
+        deb_name, deb_version, deb_arch = deb_package_fields(deb)
+        if deb_arch != "all" or deb_name != "ubuntu-gts9u-companion":
+            fail(f"Unexpected DEB metadata: {deb_name} {deb_version} {deb_arch}")
+        assets.append(asset(deb, "deb", deb_name, deb_version, {
+            "os_id": "ubuntu", "os_version": "24.04", "arch": "aarch64", "device": "SM-X910",
+        }))
+    else:
+        rpm = one(root, "*.rpm")
+        aur = one(root, "tab-companion-arch-source.tar.gz")
+        rpm_name, rpm_version, rpm_arch = fields(
+            ["rpm", "-qp", "--queryformat", "%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}", "{archive}"], rpm
+        )
+        aur_values = aur_metadata(aur)
+        if rpm_arch != "noarch" or rpm_name != "tab-companion":
+            fail(f"Unexpected RPM metadata: {rpm_name} {rpm_version} {rpm_arch}")
+        assets.extend((
+            asset(rpm, "rpm", rpm_name, rpm_version, {
+                "os_id": "fedora", "os_version": "44", "arch": "aarch64", "device": "SM-X810",
+            }),
+            asset(aur, "aur-source", aur_values["pkgname"],
+                  f"{aur_values['pkgver']}-{aur_values['pkgrel']}", {
+                "os_id": "arch", "os_version": "*", "arch": "aarch64", "device": "SM-X810",
+            }),
+        ))
+
     document = {
         "schema_version": 1,
         "project": "tab-companion",
@@ -137,18 +157,7 @@ def main():
         "run_number": run_number,
         "commit": commit,
         "branch": branch,
-        "assets": [
-            asset(deb, "deb", deb_name, deb_version, {
-                "os_id": "ubuntu", "os_version": "24.04", "arch": "aarch64", "device": "SM-X910",
-            }),
-            asset(rpm, "rpm", rpm_name, rpm_version, {
-                "os_id": "fedora", "os_version": "44", "arch": "aarch64", "device": "SM-X810",
-            }),
-            asset(aur, "aur-source", aur_values["pkgname"],
-                  f"{aur_values['pkgver']}-{aur_values['pkgrel']}", {
-                "os_id": "arch", "os_version": "*", "arch": "aarch64", "device": "SM-X810",
-            }),
-        ],
+        "assets": assets,
     }
     output = root / "tab-companion-update.json"
     output.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")

@@ -10,7 +10,8 @@ validate it before use.
 
 1. Open the [Build Tab Companion workflow](https://github.com/iamSlightlyWind/tab-companion/actions/workflows/build-updates.yml)
    and wait for a successful run on `main`.
-2. Download its `tab-companion-build` artifact and extract it.
+2. Download the matching artifact and extract it: `tab-companion-ubuntu` for Ubuntu,
+   or `tab-companion-fedora` for Fedora/Arch.
 3. Install the package matching your Linux distribution and tablet:
 
    **Fedora (SM-X810):**
@@ -33,9 +34,9 @@ Launch **Tab Companion** from the app grid or run `tab-companion`.
 In Tab Companion, open **Updates**, select **Tab Companion**, then choose
 **Check** and **Install update**. It downloads the package from the latest
 successful `main` build and verifies its checksum. New commits pushed to `main`
-run the build automatically; no tags or GitHub releases are used. Artifacts
-expire after 90 days. The Android switcher is built in a parallel job and
-uploaded separately as `tab-companion-android-apk`.
+run independent Ubuntu, Fedora/Arch, and Android jobs automatically; no tags or
+GitHub releases are used. Artifacts expire after 90 days. The Android switcher
+is uploaded separately as `tab-companion-android-apk`.
 
 Linux-port packages can use a separate update channel when their port provides
 its own compatible Actions build and metadata. Kernel and boot-image updates

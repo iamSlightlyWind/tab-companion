@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the workflow commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
 
@@ -39,15 +39,14 @@ jobs:
         run: gradle testDebugUnitTest assembleDebug
 
       - name: Upload Android APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tab-companion-android-apk
           path: android-app/bootswitcher/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 90
 
-  fedora:
-    name: Fedora
+  ubuntu:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     env:
@@ -57,14 +56,14 @@ jobs:
       APP_BUILD_BRANCH: ${{ github.ref_name }}
     steps:
       - name: Check out the workflow commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes dpkg-dev python3 rpm
+          sudo apt-get install --yes dpkg-dev python3
 
       - name: Run tests
         run: python3 -m unittest discover -s tests -v
@@ -74,15 +73,49 @@ jobs:
           set -euo pipefail
           rm -rf ports/ubuntu-x910/out
           bash tools/build-ubuntu-deb.sh
-          mkdir -p build/tab-companion-build
+          mkdir -p build/tab-companion-ubuntu
           mapfile -t packages < <(find ports/ubuntu-x910/out -maxdepth 1 -type f -name '*.deb' -print)
           [[ ${#packages[@]} -eq 1 ]]
-          cp "${packages[0]}" build/tab-companion-build/
+          cp "${packages[0]}" build/tab-companion-ubuntu/
 
-      - name: Build Fedora RPM in the official Fedora container
+      - name: Generate Ubuntu update index
+        run: python3 tools/make-actions-index.py build/tab-companion-ubuntu ubuntu
+
+      - name: Upload Ubuntu update artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: tab-companion-ubuntu
+          path: build/tab-companion-ubuntu/
+          if-no-files-found: error
+          retention-days: 90
+
+  fedora:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    env:
+      APP_BUILD_RUN_ID: ${{ github.run_id }}
+      APP_BUILD_RUN_NUMBER: ${{ github.run_number }}
+      APP_BUILD_HEAD_SHA: ${{ github.sha }}
+      APP_BUILD_BRANCH: ${{ github.ref_name }}
+    steps:
+      - name: Check out the workflow commit
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install test and index tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes python3 rpm
+
+      - name: Run tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Build Fedora RPM and Arch source in the Fedora container
         run: |
           set -euo pipefail
           rm -rf ports/fedora-x810/out
+          mkdir -p build/tab-companion-fedora
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/workspace" \
             -w /workspace \
@@ -97,22 +130,16 @@ jobs:
               pkgrel=$((1000000 + APP_BUILD_RUN_NUMBER))
               tools/build-aur-source.sh "$base_version" "$pkgrel"
             '
-          mapfile -t packages < <(find ports/fedora-x810/out/rpms -maxdepth 1 -type f -name '*.rpm' -print)
-          [[ ${#packages[@]} -eq 1 ]]
-          cp "${packages[0]}" build/tab-companion-build/
-
-      - name: Stage self-contained Arch AUR update source
-        run: |
-          set -euo pipefail
-          mapfile -t packages < <(find ports/fedora-x810/out/arch -maxdepth 1 -type f -name 'tab-companion-aur-source.tar.gz' -print)
-          [[ ${#packages[@]} -eq 1 ]]
-          cp "${packages[0]}" build/tab-companion-build/tab-companion-arch-source.tar.gz
+          mapfile -t rpms < <(find ports/fedora-x810/out/rpms -maxdepth 1 -type f -name '*.rpm' -print)
+          mapfile -t aur_sources < <(find ports/fedora-x810/out/arch -maxdepth 1 -type f -name 'tab-companion-aur-source.tar.gz' -print)
+          [[ ${#rpms[@]} -eq 1 && ${#aur_sources[@]} -eq 1 ]]
+          cp "${rpms[0]}" "${aur_sources[0]}" build/tab-companion-fedora/
 
       - name: Validate Arch update source with makepkg
         run: |
           set -euo pipefail
           docker run --rm \
-            -v "$GITHUB_WORKSPACE/build/tab-companion-build:/artifact" \
+            -v "$GITHUB_WORKSPACE/build/tab-companion-fedora:/artifact" \
             archlinux:base-devel bash -euc '
               useradd --create-home builder
               mkdir -p /home/builder/build
@@ -121,13 +148,13 @@ jobs:
               su builder -s /bin/bash -c "cd /home/builder/build && makepkg --nodeps --noconfirm --cleanbuild"
             '
 
-      - name: Generate per-build update index
-        run: python3 tools/make-actions-index.py build/tab-companion-build
+      - name: Generate Fedora and Arch update index
+        run: python3 tools/make-actions-index.py build/tab-companion-fedora fedora
 
-      - name: Upload latest successful build artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Fedora and Arch update artifact
+        uses: actions/upload-artifact@v6
         with:
-          name: tab-companion-build
-          path: build/tab-companion-build/
+          name: tab-companion-fedora
+          path: build/tab-companion-fedora/
           if-no-files-found: error
           retention-days: 90
