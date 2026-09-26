@@ -10,7 +10,6 @@ from .actions import action_for, action_label, actions_for
 from .hardware import HardwareClient
 from .i18n import _, N_
 from .key_selector import KeyChooser, chord_label
-from .keyboard_diagnostics_ui import add_to_about as add_keyboard_diagnostics
 from .updates_page import UpdatesPage, legacy_ubuntu_update_available
 
 
@@ -1097,43 +1096,21 @@ class CompanionWindow(Adw.ApplicationWindow):
         self._update_keyboard()
 
     def _show_about(self, _button):
-        state = self.hardware.state
-        debug = (
-            f"Application version: {VERSION}\n"
-            f"Kernel: {os.uname().release}\n"
-            f"S Pen: {state.pen_state}\n"
-            f"Orientation: {state.pen_orientation}\n"
-            f"Battery: {state.pen_battery}\n"
-            f"Cover keyboard: {state.keyboard_model or 'not reported'}\n"
-            f"Remapping: {'available' if state.remapping_available else 'unavailable'}\n"
-            f"S Pen button actions: {'available' if state.button_actions_available else 'unavailable'}"
-            f"\nHaptics: {'available' if state.haptics_available else 'unavailable'}"
-        )
         about = Adw.AboutWindow(
             transient_for=self,
             application_name="Tab Companion",
             application_icon="io.github.agcarbajo.TabCompanion",
             developer_name=_("gts9wifi Fedora port contributors"),
             version=VERSION,
-            website="https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra",
-            issue_url="https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra/issues",
+            issue_url="https://github.com/iamSlightlyWind/tab-companion/issues",
             license_type=Gtk.License.MIT_X11,
-            comments=_("S Pen, keyboard and haptics settings for the Galaxy Tab S9+.") + "\n" + _("Kernel") + ": " + os.uname().release,
-            debug_info=debug,
-            debug_info_filename="tab-companion-hardware.txt",
-        )
-        about.add_credit_section(
-            _("Original port creator"),
-            ["@agcarbajo https://github.com/agcarbajo"],
-        )
-        about.add_credit_section(_("Hardware enablement"), [_("Ubuntu gts9uwifi port contributors")])
-        about.add_credit_section(
-            _("Air pointer inspiration"),
-            ["PenMouse S — Jakub J (@jojczak)"],
         )
         about.add_link(
-            _("PenMouse S on GitHub"),
-            "https://github.com/jojczak/PenMouseS",
+            _("Repository"),
+            "https://github.com/iamSlightlyWind/tab-companion",
         )
-        add_keyboard_diagnostics(about)
+        about.add_credit_section(
+            _("Credits"),
+            ["agcarbajo/ubuntu-galaxy-tab-s9-ultra", "jojczak/PenMouseS"],
+        )
         about.present()
