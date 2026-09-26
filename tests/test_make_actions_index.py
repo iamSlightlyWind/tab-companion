@@ -69,11 +69,16 @@ class BuildIndexSelectionTests(unittest.TestCase):
                     with patch.object(INDEX, "deb_package_fields",
                                       return_value=("ubuntu-gts9u-companion", "1.4.2+build.7", "all")):
                         INDEX.main()
-                else:
+                elif target == "fedora":
                     with patch.object(INDEX, "fields", return_value=("tab-companion", "1.4.2.7-1000007.fc44", "noarch")), \
                             patch.object(INDEX, "aur_metadata", return_value={
                                 "pkgname": "tab-companion", "pkgver": "1.4.2", "pkgrel": "1000007",
                             }):
+                        INDEX.main()
+                else:
+                    with patch.object(INDEX, "aur_metadata", return_value={
+                        "pkgname": "tab-companion", "pkgver": "1.4.2", "pkgrel": "1000007",
+                    }):
                         INDEX.main()
             return json.loads((root / "tab-companion-update.json").read_text())
 
@@ -82,10 +87,15 @@ class BuildIndexSelectionTests(unittest.TestCase):
         self.assertEqual([asset["format"] for asset in manifest["assets"]], ["deb"])
         self.assertEqual(manifest["assets"][0]["target"]["os_id"], "ubuntu")
 
-    def test_fedora_artifact_indexes_fedora_and_arch_packages(self):
-        manifest = self.make_index("fedora", ["companion.rpm", "tab-companion-arch-source.tar.gz"])
-        self.assertEqual([asset["format"] for asset in manifest["assets"]], ["rpm", "aur-source"])
-        self.assertEqual([asset["target"]["os_id"] for asset in manifest["assets"]], ["fedora", "arch"])
+    def test_fedora_index_contains_only_rpm(self):
+        manifest = self.make_index("fedora", ["companion.rpm"])
+        self.assertEqual([asset["format"] for asset in manifest["assets"]], ["rpm"])
+        self.assertEqual(manifest["assets"][0]["target"]["os_id"], "fedora")
+
+    def test_arch_index_contains_only_aur_source(self):
+        manifest = self.make_index("arch", ["tab-companion-arch-source.tar.gz"])
+        self.assertEqual([asset["format"] for asset in manifest["assets"]], ["aur-source"])
+        self.assertEqual(manifest["assets"][0]["target"]["os_id"], "arch")
 
 
 if __name__ == "__main__":

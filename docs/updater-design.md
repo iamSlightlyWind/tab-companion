@@ -5,7 +5,8 @@ and Linux-port update channels. It queries the configured public GitHub repo
 for the newest completed, successful `push` run of a named workflow on a
 configured branch (normally `main`), then downloads that run's named Actions
 artifact. The app channel defaults to `build-updates.yml` and
-`tab-companion-ubuntu` on Ubuntu or `tab-companion-fedora` on Fedora/Arch;
+`tab-companion-ubuntu` on Ubuntu, `tab-companion-fedora` on Fedora, or
+`tab-companion-arch` on Arch;
 port packages can provide their own workflow, branch, artifact name, and
 build-info path in `/usr/share/tab-companion/port.json`.
 
@@ -44,7 +45,7 @@ build again. Port packages should include a corresponding port build-info
 file. `aur-source` assets are built with `makepkg` as the logged-in user, not
 as root; pacman installs the resulting package.
 
-The Actions workflow runs independent Ubuntu, Fedora/Arch, and Android jobs on
+The Actions workflow runs independent Ubuntu, Fedora, Arch, and Android jobs on
 pushes to `main`. Linux jobs test, build target packages, write an index, and
 upload separately named artifacts. It does not publish releases, create tags,
 or upload release assets.

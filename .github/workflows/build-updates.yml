@@ -111,7 +111,7 @@ jobs:
       - name: Run tests
         run: python3 -m unittest discover -s tests -v
 
-      - name: Build Fedora RPM and Arch source in the Fedora container
+      - name: Build Fedora RPM in the official Fedora container
         run: |
           set -euo pipefail
           rm -rf ports/fedora-x810/out
@@ -126,20 +126,52 @@ jobs:
             fedora:44 bash -euc '
               dnf -y install rpm-build tar findutils python3 coreutils
               tools/build-fedora-rpm.sh
-              base_version=$(sed -n "s/^Version: //p" ports/ubuntu-x910/DEBIAN/control | head -n1)
-              pkgrel=$((1000000 + APP_BUILD_RUN_NUMBER))
-              tools/build-aur-source.sh "$base_version" "$pkgrel"
             '
           mapfile -t rpms < <(find ports/fedora-x810/out/rpms -maxdepth 1 -type f -name '*.rpm' -print)
-          mapfile -t aur_sources < <(find ports/fedora-x810/out/arch -maxdepth 1 -type f -name 'tab-companion-aur-source.tar.gz' -print)
-          [[ ${#rpms[@]} -eq 1 && ${#aur_sources[@]} -eq 1 ]]
-          cp "${rpms[0]}" "${aur_sources[0]}" build/tab-companion-fedora/
+          [[ ${#rpms[@]} -eq 1 ]]
+          cp "${rpms[0]}" build/tab-companion-fedora/
 
-      - name: Validate Arch update source with makepkg
+      - name: Generate Fedora update index
+        run: python3 tools/make-actions-index.py build/tab-companion-fedora fedora
+
+      - name: Upload Fedora update artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: tab-companion-fedora
+          path: build/tab-companion-fedora/
+          if-no-files-found: error
+          retention-days: 90
+
+  arch:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    env:
+      APP_BUILD_RUN_ID: ${{ github.run_id }}
+      APP_BUILD_RUN_NUMBER: ${{ github.run_number }}
+      APP_BUILD_HEAD_SHA: ${{ github.sha }}
+      APP_BUILD_BRANCH: ${{ github.ref_name }}
+    steps:
+      - name: Check out the workflow commit
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build self-contained Arch update source
+        run: |
+          set -euo pipefail
+          base_version=$(sed -n 's/^Version: //p' ports/ubuntu-x910/DEBIAN/control | head -n1)
+          pkgrel=$((1000000 + APP_BUILD_RUN_NUMBER))
+          tools/build-aur-source.sh "$base_version" "$pkgrel"
+          mapfile -t sources < <(find ports/fedora-x810/out/arch -maxdepth 1 -type f -name 'tab-companion-aur-source.tar.gz' -print)
+          [[ ${#sources[@]} -eq 1 ]]
+          mkdir -p build/tab-companion-arch
+          cp "${sources[0]}" build/tab-companion-arch/tab-companion-arch-source.tar.gz
+
+      - name: Validate source using Arch makepkg
         run: |
           set -euo pipefail
           docker run --rm \
-            -v "$GITHUB_WORKSPACE/build/tab-companion-fedora:/artifact" \
+            -v "$GITHUB_WORKSPACE/build/tab-companion-arch:/artifact" \
             archlinux:base-devel bash -euc '
               useradd --create-home builder
               mkdir -p /home/builder/build
@@ -148,13 +180,13 @@ jobs:
               su builder -s /bin/bash -c "cd /home/builder/build && makepkg --nodeps --noconfirm --cleanbuild"
             '
 
-      - name: Generate Fedora and Arch update index
-        run: python3 tools/make-actions-index.py build/tab-companion-fedora fedora
+      - name: Generate Arch update index
+        run: python3 tools/make-actions-index.py build/tab-companion-arch arch
 
-      - name: Upload Fedora and Arch update artifact
+      - name: Upload Arch update artifact
         uses: actions/upload-artifact@v6
         with:
-          name: tab-companion-fedora
-          path: build/tab-companion-fedora/
+          name: tab-companion-arch
+          path: build/tab-companion-arch/
           if-no-files-found: error
           retention-days: 90

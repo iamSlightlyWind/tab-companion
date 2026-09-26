@@ -66,7 +66,7 @@ class UpdatesPage(Adw.PreferencesPage):
             workflow_file="build-updates.yml",
             branch="main",
             artifact_name={"deb": "tab-companion-ubuntu", "rpm": "tab-companion-fedora",
-                           "pacman": "tab-companion-fedora"}.get(self.manager, "tab-companion-fedora"),
+                           "pacman": "tab-companion-arch"}.get(self.manager, "tab-companion-fedora"),
             build_info_path="/usr/share/tab-companion/app-build.json",
             version=VERSION,
             description=_("Update the companion app without changing the installed Linux port."),

@@ -83,8 +83,8 @@ def aur_metadata(path):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[2] not in ("ubuntu", "fedora"):
-        fail("Usage: tools/make-actions-index.py BUILD_DIRECTORY ubuntu|fedora")
+    if len(sys.argv) != 3 or sys.argv[2] not in ("ubuntu", "fedora", "arch"):
+        fail("Usage: tools/make-actions-index.py BUILD_DIRECTORY ubuntu|fedora|arch")
     root = Path(sys.argv[1]).resolve()
     build_target = sys.argv[2]
     if not root.is_dir():
@@ -130,24 +130,23 @@ def main():
         assets.append(asset(deb, "deb", deb_name, deb_version, {
             "os_id": "ubuntu", "os_version": "24.04", "arch": "aarch64", "device": "SM-X910",
         }))
-    else:
+    elif build_target == "fedora":
         rpm = one(root, "*.rpm")
-        aur = one(root, "tab-companion-arch-source.tar.gz")
         rpm_name, rpm_version, rpm_arch = fields(
             ["rpm", "-qp", "--queryformat", "%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}", "{archive}"], rpm
         )
-        aur_values = aur_metadata(aur)
         if rpm_arch != "noarch" or rpm_name != "tab-companion":
             fail(f"Unexpected RPM metadata: {rpm_name} {rpm_version} {rpm_arch}")
-        assets.extend((
-            asset(rpm, "rpm", rpm_name, rpm_version, {
-                "os_id": "fedora", "os_version": "44", "arch": "aarch64", "device": "SM-X810",
-            }),
-            asset(aur, "aur-source", aur_values["pkgname"],
-                  f"{aur_values['pkgver']}-{aur_values['pkgrel']}", {
-                "os_id": "arch", "os_version": "*", "arch": "aarch64", "device": "SM-X810",
-            }),
-        ))
+        assets.append(asset(rpm, "rpm", rpm_name, rpm_version, {
+            "os_id": "fedora", "os_version": "44", "arch": "aarch64", "device": "SM-X810",
+        }))
+    else:
+        aur = one(root, "tab-companion-arch-source.tar.gz")
+        aur_values = aur_metadata(aur)
+        assets.append(asset(aur, "aur-source", aur_values["pkgname"],
+                            f"{aur_values['pkgver']}-{aur_values['pkgrel']}", {
+            "os_id": "arch", "os_version": "*", "arch": "aarch64", "device": "SM-X810",
+        }))
 
     document = {
         "schema_version": 1,
