@@ -224,30 +224,15 @@ jobs:
           name: tab-companion-arch
           path: ${{ runner.temp }}/tab-companion-arch
 
-      - name: Package public release bundles
+      - name: Package public release assets and legacy index
         env:
           RELEASE_DIR: ${{ runner.temp }}/tab-companion-release
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import os
-          import stat
-          import zipfile
-          from pathlib import Path
-
-          root = Path(os.environ["RUNNER_TEMP"])
-          output = Path(os.environ["RELEASE_DIR"])
-          output.mkdir(parents=True, exist_ok=True)
-          for artifact in ("ubuntu", "fedora", "arch"):
-              source = root / f"tab-companion-{artifact}"
-              destination = output / f"tab-companion-{artifact}.zip"
-              members = sorted(source.iterdir())
-              if not members or any(not path.is_file() or path.is_symlink() for path in members):
-                  raise SystemExit(f"Invalid or empty {artifact} build artifact")
-              with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-                  for path in members:
-                      bundle.write(path, path.name)
-          PY
+          python3 tools/make_legacy_release_assets.py "$RUNNER_TEMP" "$RELEASE_DIR" \
+            --repo "$GITHUB_REPOSITORY" --tag "tab-companion-build-${GITHUB_RUN_ID}" \
+            --run-id "$GITHUB_RUN_ID" --run-number "$GITHUB_RUN_NUMBER" \
+            --commit "$GITHUB_SHA" --branch "$GITHUB_REF_NAME"
 
       - name: Publish rolling latest successful build release
         env:
@@ -256,9 +241,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="tab-companion-build-${GITHUB_RUN_ID}"
-          assets=("$RELEASE_DIR/tab-companion-ubuntu.zip" \
-                  "$RELEASE_DIR/tab-companion-fedora.zip" \
-                  "$RELEASE_DIR/tab-companion-arch.zip")
+          mapfile -t assets < <(find "$RELEASE_DIR" -maxdepth 1 -type f -print | sort)
+          [[ ${#assets[@]} -eq 7 ]]
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
