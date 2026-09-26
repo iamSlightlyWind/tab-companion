@@ -1,8 +1,10 @@
 # Tab Companion
 
-GTK app and package updater for Linux on Samsung Galaxy tablets. This is an
-experimental, community project derived from
-[`agcarbajo/ubuntu-galaxy-tab-s9-ultra`](https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra); it is not an official Samsung or upstream release.
+GTK app and package updater for Linux on Samsung Galaxy tablets. This
+experimental community project derives from
+[`agcarbajo/ubuntu-galaxy-tab-s9-ultra`](https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra)
+and was produced with substantial AI assistance. It is unofficial; review and
+validate it before use.
 
 ## Install once
 
@@ -32,7 +34,8 @@ In Tab Companion, open **Updates**, select **Tab Companion**, then choose
 **Check** and **Install update**. It downloads the package from the latest
 successful `main` build and verifies its checksum. New commits pushed to `main`
 run the build automatically; no tags or GitHub releases are used. Artifacts
-expire after 90 days.
+expire after 90 days. The Android switcher is built in a parallel job and
+uploaded separately as `tab-companion-android-apk`.
 
 Linux-port packages can use a separate update channel when their port provides
 its own compatible Actions build and metadata. Kernel and boot-image updates

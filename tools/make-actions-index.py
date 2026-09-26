@@ -32,7 +32,16 @@ def checksum(path):
 
 
 def fields(command, path):
-    return subprocess.check_output([*command, str(path)], text=True).splitlines()
+    """Run a package metadata query with the archive at its explicit position.
+
+    dpkg-deb expects ``-f ARCHIVE FIELD...`` while rpm expects the archive at
+    the end of its query arguments.  Requiring a single placeholder keeps the
+    caller's command order unambiguous.
+    """
+    if command.count("{archive}") != 1:
+        fail("Package metadata command must contain exactly one {archive} placeholder")
+    args = [str(path) if item == "{archive}" else item for item in command]
+    return subprocess.check_output(args, text=True).splitlines()
 
 
 def aur_metadata(path):
@@ -77,10 +86,10 @@ def main():
     rpm = one(root, "*.rpm")
     aur = one(root, "tab-companion-arch-source.tar.gz")
     deb_name, deb_version, deb_arch = fields(
-        ["dpkg-deb", "-f", "Package", "Version", "Architecture"], deb
+        ["dpkg-deb", "-f", "{archive}", "Package", "Version", "Architecture"], deb
     )
     rpm_name, rpm_version, rpm_arch = fields(
-        ["rpm", "-qp", "--queryformat", "%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}"], rpm
+        ["rpm", "-qp", "--queryformat", "%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}", "{archive}"], rpm
     )
     aur_values = aur_metadata(aur)
     if deb_arch != "all" or deb_name != "ubuntu-gts9u-companion":
