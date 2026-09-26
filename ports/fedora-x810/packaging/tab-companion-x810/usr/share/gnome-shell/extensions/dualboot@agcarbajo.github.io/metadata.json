@@ -1,7 +1,7 @@
 {
   "uuid": "dualboot@agcarbajo.github.io",
-  "name": "Dual boot",
-  "description": "Restart into the other system installed on this tablet from the quick settings.",
+  "name": "Restart into Android",
+  "description": "Adds a password-authenticated Restart into Android action to GNOME's power menu.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
   "url": "https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra",
   "version": 1

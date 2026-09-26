@@ -116,8 +116,10 @@ class UpdatesPage(Adw.PreferencesPage):
             saved_repo = self.config.values.get(key + "_repo", "")
             repo = saved_repo if isinstance(saved_repo, str) else ""
         repo_row = Adw.ActionRow(title=_("Build repository"), subtitle=_("Public GitHub repository; latest successful build"))
-        repo_entry = Gtk.Entry(text=repo, hexpand=True, width_chars=28, valign=Gtk.Align.CENTER,
+        repo_entry = Gtk.Entry(text=repo, hexpand=True, width_chars=42, valign=Gtk.Align.CENTER,
                                placeholder_text="https://github.com/owner/repository")
+        repo_entry.set_tooltip_text(repo)
+        repo_entry.connect("changed", lambda entry: entry.set_tooltip_text(entry.get_text()))
         repo_row.add_suffix(repo_entry)
         group.add(repo_row)
 

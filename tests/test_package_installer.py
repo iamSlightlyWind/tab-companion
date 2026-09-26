@@ -3,11 +3,15 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
+import hashlib
+import os
+import stat
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tab_companion.package_installer import _verify_package
+from tab_companion.package_installer import _copy_verified, _verify_package
 
 
 class PackageMetadataTests(unittest.TestCase):
@@ -35,6 +39,37 @@ class PackageMetadataTests(unittest.TestCase):
              patch("tab_companion.package_installer.subprocess.check_output", return_value="tab-companion\n1.0.0-1.fc44\naarch64"):
             with self.assertRaisesRegex(ValueError, "version"):
                 _verify_package(self.path, "rpm", "tab-companion", "2.0.0-1.fc44", "aarch64")
+
+
+class StagedPackageTests(unittest.TestCase):
+    def test_staged_package_keeps_native_manager_suffix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source-file"
+            source.write_bytes(b"verified package contents")
+            staging = root / "staging"
+            staging.mkdir()
+            cases = (
+                ("rpm", ".rpm"),
+                ("deb", ".deb"),
+                ("pacman-local", ".pkg.tar.zst"),
+            )
+            for fmt, suffix in cases:
+                with self.subTest(fmt=fmt), \
+                     patch("tab_companion.package_installer.STAGING", staging), \
+                     patch.object(Path, "lstat", return_value=SimpleNamespace(
+                         st_uid=0, st_mode=stat.S_IFDIR | 0o755)):
+                    path = _copy_verified(
+                        source,
+                        hashlib.sha256(source.read_bytes()).hexdigest(),
+                        os.getuid(),
+                        fmt,
+                    )
+                    try:
+                        self.assertTrue(path.name.endswith(suffix))
+                        self.assertEqual(path.read_bytes(), source.read_bytes())
+                    finally:
+                        path.unlink()
 
 
 if __name__ == "__main__":

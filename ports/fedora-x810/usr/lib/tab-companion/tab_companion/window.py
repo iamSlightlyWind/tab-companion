@@ -10,7 +10,6 @@ from .actions import action_for, action_label, actions_for
 from .hardware import HardwareClient
 from .i18n import _, N_
 from .key_selector import KeyChooser, chord_label
-from .keyboard_diagnostics_ui import add_to_about as add_keyboard_diagnostics
 from .updates_page import UpdatesPage, legacy_ubuntu_update_available
 
 
@@ -199,7 +198,7 @@ class CompanionWindow(Adw.ApplicationWindow):
                 self._system_page(), "dualboot", _("Dualboot"), "drive-multidisk-symbolic"
             )
         self.view_stack.add_titled_with_icon(
-            UpdatesPage(self), "updates", _("Updates"), "software-update-available-symbolic"
+            UpdatesPage(self), "updates", _("Update"), "software-update-available-symbolic"
         )
         if legacy_ubuntu_update_available():
             # The preserved upstream APT/dpkg port updater includes the X910
@@ -302,15 +301,9 @@ class CompanionWindow(Adw.ApplicationWindow):
         self.boot_progress.set_visible(False)
         page.add(self.boot_progress)
 
-        shortcut = Adw.PreferencesGroup(title=_("Shortcut"))
-        self.boot_tile_row = Adw.SwitchRow(
-            title=_("Show in quick settings"),
-            subtitle=_("Adds a button to the system menu that restarts into the other system."),
-        )
-        self.boot_tile_row.set_active(self._shell_extension_enabled())
-        self.boot_tile_row.connect("notify::active", self._boot_tile_toggled)
-        shortcut.add(self.boot_tile_row)
-        page.add(shortcut)
+        # The system-menu action is installed by the extension. Enable it for
+        # this user without changing GNOME's global extension-disable setting.
+        self._ensure_shell_extension_enabled()
 
         self.boot_stack.add_named(page, "content")
         self.boot_stack.set_visible_child_name("content")
@@ -445,35 +438,20 @@ class CompanionWindow(Adw.ApplicationWindow):
         row.append(text)
         return row
 
-    # The quick settings entry is a GNOME Shell extension, and GNOME keeps the
-    # list of enabled ones in its own setting.  Editing that list is the whole
-    # of turning it on and off; there is no separate switch to flip.
+    # GNOME Shell extensions are enabled per user in this setting.
     SHELL_EXTENSION_UUID = "dualboot@agcarbajo.github.io"
 
-    def _shell_extension_enabled(self):
-        try:
-            shell = Gio.Settings.new("org.gnome.shell")
-        except GLib.Error:
-            return False
-        return (self.SHELL_EXTENSION_UUID in shell.get_strv("enabled-extensions") and
-                self.SHELL_EXTENSION_UUID not in shell.get_strv("disabled-extensions") and
-                not shell.get_boolean("disable-user-extensions"))
-
-    def _boot_tile_toggled(self, row, _param):
+    def _ensure_shell_extension_enabled(self):
         try:
             shell = Gio.Settings.new("org.gnome.shell")
         except GLib.Error:
             return
-        enabled = list(shell.get_strv("enabled-extensions"))
-        if row.get_active():
-            if self.SHELL_EXTENSION_UUID not in enabled:
-                enabled.append(self.SHELL_EXTENSION_UUID)
-            shell.set_strv("disabled-extensions", [uuid for uuid in
-                shell.get_strv("disabled-extensions") if uuid != self.SHELL_EXTENSION_UUID])
-            shell.set_boolean("disable-user-extensions", False)
-        else:
-            enabled = [uuid for uuid in enabled if uuid != self.SHELL_EXTENSION_UUID]
-        shell.set_strv("enabled-extensions", enabled)
+        raw_enabled = shell.get_strv("enabled-extensions")
+        enabled = list(dict.fromkeys(raw_enabled))
+        if self.SHELL_EXTENSION_UUID not in enabled:
+            enabled.append(self.SHELL_EXTENSION_UUID)
+        if enabled != raw_enabled:
+            shell.set_strv("enabled-extensions", enabled)
 
     def _boot_refresh(self):
         boot_sets.read_status(self._boot_status_ready)
@@ -1097,43 +1075,21 @@ class CompanionWindow(Adw.ApplicationWindow):
         self._update_keyboard()
 
     def _show_about(self, _button):
-        state = self.hardware.state
-        debug = (
-            f"Application version: {VERSION}\n"
-            f"Kernel: {os.uname().release}\n"
-            f"S Pen: {state.pen_state}\n"
-            f"Orientation: {state.pen_orientation}\n"
-            f"Battery: {state.pen_battery}\n"
-            f"Cover keyboard: {state.keyboard_model or 'not reported'}\n"
-            f"Remapping: {'available' if state.remapping_available else 'unavailable'}\n"
-            f"S Pen button actions: {'available' if state.button_actions_available else 'unavailable'}"
-            f"\nHaptics: {'available' if state.haptics_available else 'unavailable'}"
-        )
         about = Adw.AboutWindow(
             transient_for=self,
             application_name="Tab Companion",
             application_icon="io.github.agcarbajo.TabCompanion",
             developer_name=_("gts9wifi Fedora port contributors"),
             version=VERSION,
-            website="https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra",
-            issue_url="https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra/issues",
+            issue_url="https://github.com/iamSlightlyWind/tab-companion/issues",
             license_type=Gtk.License.MIT_X11,
-            comments=_("S Pen, keyboard and haptics settings for the Galaxy Tab S9+.") + "\n" + _("Kernel") + ": " + os.uname().release,
-            debug_info=debug,
-            debug_info_filename="tab-companion-hardware.txt",
-        )
-        about.add_credit_section(
-            _("Original port creator"),
-            ["@agcarbajo https://github.com/agcarbajo"],
-        )
-        about.add_credit_section(_("Hardware enablement"), [_("Ubuntu gts9uwifi port contributors")])
-        about.add_credit_section(
-            _("Air pointer inspiration"),
-            ["PenMouse S — Jakub J (@jojczak)"],
         )
         about.add_link(
-            _("PenMouse S on GitHub"),
-            "https://github.com/jojczak/PenMouseS",
+            _("Repository"),
+            "https://github.com/iamSlightlyWind/tab-companion",
         )
-        add_keyboard_diagnostics(about)
+        about.add_credit_section(
+            _("Credits"),
+            ["agcarbajo/ubuntu-galaxy-tab-s9-ultra", "jojczak/PenMouseS"],
+        )
         about.present()

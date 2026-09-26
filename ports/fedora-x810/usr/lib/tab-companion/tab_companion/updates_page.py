@@ -7,7 +7,7 @@ import subprocess
 import threading
 from pathlib import Path
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, Gdk, GLib, Gtk
 
 from . import VERSION
 from .aur import build_aur_package
@@ -59,6 +59,17 @@ class UpdatesPage(Adw.PreferencesPage):
         self.target = host_target()
         self.manager = package_manager()
         self.sources = {}
+        # Keep these secondary actions visually compact without shrinking
+        # the surrounding preference rows or changing their labels.
+        self._button_css = Gtk.CssProvider()
+        self._button_css.load_from_data(
+            b"button.update-action { min-height: 28px; padding: 2px 8px; }"
+        )
+        display = Gdk.Display.get_default()
+        if display is not None:
+            Gtk.StyleContext.add_provider_for_display(
+                display, self._button_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
         self._build_source(
             key="app",
             title=_("Tab Companion"),
@@ -105,8 +116,10 @@ class UpdatesPage(Adw.PreferencesPage):
             saved_repo = self.config.values.get(key + "_repo", "")
             repo = saved_repo if isinstance(saved_repo, str) else ""
         repo_row = Adw.ActionRow(title=_("Build repository"), subtitle=_("Public GitHub repository; latest successful build"))
-        repo_entry = Gtk.Entry(text=repo, hexpand=True, width_chars=28, valign=Gtk.Align.CENTER,
+        repo_entry = Gtk.Entry(text=repo, hexpand=True, width_chars=42, valign=Gtk.Align.CENTER,
                                placeholder_text="https://github.com/owner/repository")
+        repo_entry.set_tooltip_text(repo)
+        repo_entry.connect("changed", lambda entry: entry.set_tooltip_text(entry.get_text()))
         repo_row.add_suffix(repo_entry)
         group.add(repo_row)
 
@@ -115,8 +128,8 @@ class UpdatesPage(Adw.PreferencesPage):
         status.add_prefix(status_icon)
         group.add(status)
         buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        check = Gtk.Button(label=_("Check"), css_classes=["pill"])
-        install = Gtk.Button(label=_("Install update"), css_classes=["pill", "suggested-action"], sensitive=False)
+        check = Gtk.Button(label=_("Check"), css_classes=["pill", "update-action"])
+        install = Gtk.Button(label=_("Install update"), css_classes=["pill", "suggested-action", "update-action"], sensitive=False)
         buttons.append(check)
         buttons.append(install)
         actions = Adw.ActionRow(title=_("Build actions"))

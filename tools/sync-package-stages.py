@@ -16,6 +16,14 @@ FEDORA_STAGES = (
     ROOT / "ports/fedora-x810/usr/lib/tab-companion/tab_companion",
 )
 UBUNTU_PACKAGE = ROOT / "ports/ubuntu-x910/usr/lib/tab-companion/tab_companion"
+FEDORA_PORT = ROOT / "ports/fedora-x810"
+UBUNTU_PORT = ROOT / "ports/ubuntu-x910"
+DUALBOOT_FILES = (
+    Path("usr/share/gnome-shell/extensions/dualboot@agcarbajo.github.io/extension.js"),
+    Path("usr/share/gnome-shell/extensions/dualboot@agcarbajo.github.io/metadata.json"),
+    Path("usr/share/glib-2.0/schemas/io.github.agcarbajo.TabCompanion.gschema.xml"),
+    Path("usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.BootSwitch.policy"),
+)
 
 
 def replace_tree(source: Path, target: Path):
@@ -47,10 +55,20 @@ def sync_ubuntu():
     window.write_text(text, encoding="utf-8")
 
 
+def sync_dualboot_integration():
+    """Keep the separately packaged GNOME integration in both distro stages."""
+    fedora_stage = FEDORA_PORT / "packaging/tab-companion-x810"
+    for relative in DUALBOOT_FILES:
+        source = FEDORA_PORT / relative
+        shutil.copy2(source, fedora_stage / relative)
+        shutil.copy2(source, UBUNTU_PORT / relative)
+
+
 def main():
     for target in FEDORA_STAGES:
         replace_tree(SOURCE, target)
     sync_ubuntu()
+    sync_dualboot_integration()
     print("Synchronized Tab Companion source into Fedora and Ubuntu package stages")
 
 

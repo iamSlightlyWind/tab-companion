@@ -17,13 +17,17 @@ MAX_PACKAGE_SIZE = 4 * 1024**3
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_@-]{0,127}$")
 STAGING = Path("/var/cache/tab-companion/update-staging")
+PACKAGE_SUFFIXES = {"deb": ".deb", "rpm": ".rpm", "pacman-local": ".pkg.tar.zst"}
 
 
 def _run(argv):
     subprocess.run(argv, check=True, env={**os.environ, "LC_ALL": "C", "DEBIAN_FRONTEND": "noninteractive"})
 
 
-def _copy_verified(source, expected, uid):
+def _copy_verified(source, expected, uid, fmt):
+    suffix = PACKAGE_SUFFIXES.get(fmt)
+    if suffix is None:
+        raise ValueError("Unsupported native package format")
     source = Path(source)
     fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     temp_path = None
@@ -35,7 +39,9 @@ def _copy_verified(source, expected, uid):
         st = STAGING.lstat()
         if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
             raise ValueError("Unsafe root-owned update staging directory")
-        out_fd, temp_path = tempfile.mkstemp(prefix="package-", dir=STAGING)
+        # Native package managers infer local package files from their suffix.
+        # Without it, DNF5 treats the staging path as a package name/NEVRA.
+        out_fd, temp_path = tempfile.mkstemp(prefix="package-", suffix=suffix, dir=STAGING)
         digest = hashlib.sha256()
         total = 0
         with os.fdopen(out_fd, "wb") as output, os.fdopen(fd, "rb", closefd=False) as input_file:
@@ -108,7 +114,7 @@ def _verify_package(path, fmt, package_name, package_version, expected_arch):
 def install(source, expected_hash, fmt, package_name, package_version, expected_arch, requesting_uid):
     if not DIGEST.fullmatch(expected_hash):
         raise ValueError("Invalid SHA-256 value")
-    path = _copy_verified(source, expected_hash, requesting_uid)
+    path = _copy_verified(source, expected_hash, requesting_uid, fmt)
     try:
         _verify_package(path, fmt, package_name, package_version, expected_arch)
         if fmt == "deb":
