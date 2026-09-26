@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<policyconfig>
+  <vendor>Tab Companion</vendor>
+  <action id="io.github.agcarbajo.TabCompanion.InstallPackage">
+    <description>Install a verified Tab Companion package update</description>
+    <message>Authentication is required to install this package update</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/tab-companion-install-package</annotate>
+  </action>
+</policyconfig>

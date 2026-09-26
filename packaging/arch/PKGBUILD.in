@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+pkgname=tab-companion
+pkgver=@VERSION@
+pkgrel=@PKGREL@
+pkgdesc='Samsung Galaxy tablet S Pen, keyboard and hardware companion'
+arch=('any')
+url='https://github.com/iamSlightlyWind/tab-companion'
+license=('MIT')
+depends=('python' 'python-gobject' 'python-dbus' 'gtk4' 'libadwaita' 'glib2' 'polkit' 'systemd' 'dbus' 'gnome-shell')
+source=('tab-companion-x810.tar.gz')
+sha256sums=('@BUNDLE_SHA256@')
+
+package() {
+    tar -xzf "${srcdir}/tab-companion-x810.tar.gz" -C "${pkgdir}"
+    # Fedora's system-origin record must not falsely label an Arch install.
+    rm -f "${pkgdir}/usr/share/tab-companion/port.json"
+}

@@ -1,0 +1,42 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Toggle Tab Companion's narrowly scoped no-password boot switch."""
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+RULE = Path("/etc/polkit-1/rules.d/49-tab-companion-boot-switch.rules")
+ACTION = "io.github.agcarbajo.TabCompanion.X810.boot-switch"
+CONTENT = f'''// Tab Companion: enabled explicitly by the local owner.
+polkit.addRule(function(action, subject) {{
+    if (action.id == "{ACTION}" && subject.local && subject.active)
+        return polkit.Result.YES;
+}});
+'''
+
+
+def main(argv):
+    if os.geteuid() != 0 or len(argv) != 2 or argv[1] not in ("on", "off"):
+        print("usage: tab-companion-boot-noask on|off", file=sys.stderr)
+        return 2
+    if argv[1] == "on":
+        RULE.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".tab-companion-", dir=RULE.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(CONTENT)
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, RULE)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+    else:
+        RULE.unlink(missing_ok=True)
+    print("on" if RULE.exists() else "off")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

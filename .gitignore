@@ -1,0 +1,33 @@
+# Python caches, environments, and test reports
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.venv/
+venv/
+.coverage*
+htmlcov/
+
+# Local credentials/config; keep checked-in templates named *.example
+.env
+.env.*
+!.env.example
+
+# Generated packages, bundles, and build/test output
+/build/
+/dist/
+**/out/
+artifacts/
+
+# Editor/OS noise and local logs
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.log
+core
+core.[0-9]*

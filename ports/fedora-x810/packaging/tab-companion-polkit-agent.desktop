@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PolicyKit Authentication Agent (Tab Companion)
+Comment=Authenticate privileged boot-set changes in GNOME
+Exec=/usr/libexec/polkit-mate-authentication-agent-1
+NoDisplay=true
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true

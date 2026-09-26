@@ -1,0 +1,45 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Adapter for Tab Companion; X810 backend performs all validation/writes."""
+import json
+import subprocess
+import sys
+
+BACKEND = "/usr/local/libexec/x810-boot-switch-core"
+
+
+def emit(kind, message):
+    print(json.dumps({"kind": kind, "message": message}), flush=True)
+
+
+def main(argv):
+    if len(argv) not in (2, 3) or argv[1] not in ("fedora", "android"):
+        emit("error", "Choose the Fedora or Android boot set.")
+        return 2
+    reboot = len(argv) == 3 and argv[2] == "--reboot"
+    if len(argv) == 3 and not reboot:
+        emit("error", "Unexpected option.")
+        return 2
+    try:
+        proc = subprocess.Popen([BACKEND, "stage", argv[1]], text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                bufsize=1)
+        for line in proc.stdout:
+            line = line.strip()
+            if line:
+                emit("error" if line.startswith("ERROR:") else "step", line)
+        rc = proc.wait()
+        if rc:
+            return rc
+        emit("done", f"{argv[1].title()} boot set copied and read-back checked.")
+        if reboot:
+            emit("step", "Restarting into the selected system…")
+            return subprocess.run(["systemctl", "reboot"], check=False).returncode
+        return 0
+    except Exception as e:
+        emit("error", str(e))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

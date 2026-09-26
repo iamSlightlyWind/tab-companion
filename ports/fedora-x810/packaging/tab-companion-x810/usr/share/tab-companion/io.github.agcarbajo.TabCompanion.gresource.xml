@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/agcarbajo/TabCompanion/images">
+    <file alias="spen-tip-left.svg">spen-tip-left.svg</file>
+    <file alias="spen-tip-right.svg">spen-tip-right.svg</file>
+  </gresource>
+</gresources>

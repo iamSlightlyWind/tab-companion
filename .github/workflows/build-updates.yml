@@ -1,0 +1,98 @@
+name: Build Tab Companion update
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    env:
+      APP_BUILD_RUN_ID: ${{ github.run_id }}
+      APP_BUILD_RUN_NUMBER: ${{ github.run_number }}
+      APP_BUILD_HEAD_SHA: ${{ github.sha }}
+      APP_BUILD_BRANCH: ${{ github.ref_name }}
+    steps:
+      - name: Check out the workflow commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dpkg-dev python3 rpm
+
+      - name: Run tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Build Ubuntu DEB
+        run: |
+          set -euo pipefail
+          rm -rf ports/ubuntu-x910/out
+          bash tools/build-ubuntu-deb.sh
+          mkdir -p build/tab-companion-build
+          mapfile -t packages < <(find ports/ubuntu-x910/out -maxdepth 1 -type f -name '*.deb' -print)
+          [[ ${#packages[@]} -eq 1 ]]
+          cp "${packages[0]}" build/tab-companion-build/
+
+      - name: Build Fedora RPM in the official Fedora container
+        run: |
+          set -euo pipefail
+          rm -rf ports/fedora-x810/out
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            -e APP_BUILD_RUN_ID="$APP_BUILD_RUN_ID" \
+            -e APP_BUILD_RUN_NUMBER="$APP_BUILD_RUN_NUMBER" \
+            -e APP_BUILD_HEAD_SHA="$APP_BUILD_HEAD_SHA" \
+            -e APP_BUILD_BRANCH="$APP_BUILD_BRANCH" \
+            fedora:44 bash -euc '
+              dnf -y install rpm-build tar findutils python3 coreutils
+              tools/build-fedora-rpm.sh
+            '
+          # The Fedora container builds as root against the mounted workspace;
+          # return ownership so the following unprivileged AUR bundle build can
+          # write to ports/fedora-x810/out.
+          sudo chown -R "$(id -u):$(id -g)" ports/fedora-x810/out
+          mapfile -t packages < <(find ports/fedora-x810/out/rpms -maxdepth 1 -type f -name '*.rpm' -print)
+          [[ ${#packages[@]} -eq 1 ]]
+          cp "${packages[0]}" build/tab-companion-build/
+
+      - name: Build self-contained Arch AUR update source
+        run: |
+          set -euo pipefail
+          base_version=$(sed -n 's/^Version: //p' ports/ubuntu-x910/DEBIAN/control | head -n1)
+          pkgrel=$((1000000 + APP_BUILD_RUN_NUMBER))
+          tools/build-aur-source.sh "$base_version" "$pkgrel"
+          mapfile -t packages < <(find ports/fedora-x810/out/arch -maxdepth 1 -type f -name 'tab-companion-aur-source.tar.gz' -print)
+          [[ ${#packages[@]} -eq 1 ]]
+          cp "${packages[0]}" build/tab-companion-build/tab-companion-arch-source.tar.gz
+
+      - name: Validate Arch update source with makepkg
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/build/tab-companion-build:/artifact" \
+            archlinux:base-devel bash -euc '
+              useradd --create-home builder
+              mkdir -p /home/builder/build
+              tar -xzf /artifact/tab-companion-arch-source.tar.gz -C /home/builder/build
+              chown -R builder:builder /home/builder/build
+              su builder -s /bin/bash -c "cd /home/builder/build && makepkg --nodeps --noconfirm --cleanbuild"
+            '
+
+      - name: Generate per-build update index
+        run: python3 tools/make-actions-index.py build/tab-companion-build
+
+      - name: Upload latest successful build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tab-companion-build
+          path: build/tab-companion-build/
+          if-no-files-found: error
+          retention-days: 90

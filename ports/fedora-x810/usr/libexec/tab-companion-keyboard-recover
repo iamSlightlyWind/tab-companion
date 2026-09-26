@@ -1,0 +1,87 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Safely rebind only the X810 EF-DX815 STM32 pogo driver."""
+import os
+from pathlib import Path
+import sys
+import time
+
+DEVICE = "10-002a"
+DEVICE_PATH = Path("/sys/bus/i2c/devices") / DEVICE
+DRIVER_PATH = Path("/sys/bus/i2c/drivers/samsung-gts9u-stm32-pogo")
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+
+def wait_for(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def diagnostics():
+    try:
+        fields = dict(item.split("=", 1) for item in
+                      (DEVICE_PATH / "diagnostics").read_text().split() if "=" in item)
+        return fields
+    except OSError:
+        return {}
+
+
+def main():
+    if os.geteuid() != 0:
+        fail("Run this fixed-command helper through pkexec.")
+    if len(sys.argv) != 1:
+        fail("This helper accepts no arguments.")
+    if not DEVICE_PATH.is_dir() or not DRIVER_PATH.is_dir():
+        fail("The X810 EF-DX815 pogo controller was not found.")
+    try:
+        if (DEVICE_PATH / "name").read_text().strip() != "gts9u-stm32-pogo":
+            fail("The I2C device does not identify as Samsung's STM32 pogo controller.")
+        fields = diagnostics()
+        if fields.get("model") != "0xfb":
+            fail("The connected cover is not identified as the EF-DX815 (model 0xfb).")
+        if fields.get("attached") != "1" or fields.get("connected") != "1":
+            fail("The EF-DX815 must be attached and connected before recovery.")
+        bound = (DEVICE_PATH / "driver").resolve(strict=True)
+        if bound != DRIVER_PATH.resolve(strict=True):
+            fail("The expected Samsung pogo driver is not bound to this device.")
+    except OSError as error:
+        fail("Could not verify the keyboard controller: " + str(error))
+
+    unbound = False
+    try:
+        (DRIVER_PATH / "unbind").write_text(DEVICE + "\n")
+        unbound = True
+        if not wait_for(lambda: not (DEVICE_PATH / "driver").exists()):
+            fail("The kernel did not finish unbinding the pogo driver.")
+        (DRIVER_PATH / "bind").write_text(DEVICE + "\n")
+        if not wait_for(lambda: (DEVICE_PATH / "driver").exists()):
+            fail("The kernel did not rebind the pogo driver.")
+        unbound = False
+    except OSError as error:
+        fail("Kernel driver reset failed: " + str(error))
+    finally:
+        # Never intentionally leave the device unbound if a write or timeout
+        # failed. This only touches the one fixed I2C device above.
+        if unbound and not (DEVICE_PATH / "driver").exists():
+            try:
+                (DRIVER_PATH / "bind").write_text(DEVICE + "\n")
+            except OSError:
+                pass
+
+    if not wait_for(lambda: (lambda d: d.get("attached") == "1" and
+                             d.get("connected") == "1" and d.get("model") == "0xfb")
+                    (diagnostics()), timeout=10.0):
+        fail("The driver rebound, but the EF-DX815 did not reinitialize; check its attachment.")
+    print("EF-DX815 controller reset and reinitialized; no key data or firmware was accessed.")
+
+
+if __name__ == "__main__":
+    main()

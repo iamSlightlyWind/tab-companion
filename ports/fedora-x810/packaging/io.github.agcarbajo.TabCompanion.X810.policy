@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Tab Companion for Galaxy Tab S9+ SM-X810</vendor>
+  <vendor_url>https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra</vendor_url>
+  <action id="io.github.agcarbajo.TabCompanion.X810.boot-status">
+    <description>Read the active boot set</description>
+    <message>Authentication is required to read boot partitions</message>
+    <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>yes</allow_active></defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/tab-companion-boot-status</annotate>
+  </action>
+  <action id="io.github.agcarbajo.TabCompanion.X810.boot-switch">
+    <description>Change the next boot system</description>
+    <message>Authentication is required to change the next boot system</message>
+    <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_admin_keep</allow_active></defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/tab-companion-boot-switch</annotate>
+  </action>
+</policyconfig>

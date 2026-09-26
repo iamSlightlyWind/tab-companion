@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "port_id": "x910-ubuntu",
+  "name": "Ubuntu for Galaxy Tab S9 Ultra Wi-Fi (SM-X910)",
+  "repo_url": "https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra",
+  "version": "1.4.2",
+  "device_id": "SM-X910",
+  "os_id": "ubuntu",
+  "os_version": "24.04",
+  "arch": "aarch64"
+}
