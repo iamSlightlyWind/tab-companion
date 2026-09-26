@@ -6,7 +6,6 @@ import os
 import tempfile
 import unittest
 import zipfile
-from datetime import datetime, timedelta, timezone
 from email.message import Message
 from pathlib import Path
 import sys
@@ -16,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tab_companion import updates
 from tab_companion.updates import (
+    APP_BUILD_ARTIFACTS,
     BuildArtifact,
     UpdateConfig,
     UpdateError,
@@ -71,7 +71,8 @@ class UpdatesTests(unittest.TestCase):
         self.manifest = self._manifest(self.run, self.package)
         self.archive = self._zip(self.manifest, {"tab-companion.rpm": self.package})
         self.artifact_url = "https://api.github.com/repos/example/tab-companion/actions/artifacts/9001/zip"
-        self.expires_at = (datetime.now(timezone.utc) + timedelta(days=20)).isoformat().replace("+00:00", "Z")
+        self.release_url = "https://api.github.com/repos/example/tab-companion/releases/tags/tab-companion-build-101"
+        self.release_asset_url = "https://github.com/example/tab-companion/releases/download/tab-companion-build-101/tab-companion-build.zip"
 
     @staticmethod
     def _run(*, run_id, run_number, conclusion="success", event="push", branch="main", status="completed", commit=None):
@@ -119,30 +120,33 @@ class UpdatesTests(unittest.TestCase):
                 archive.writestr(name, body)
         return stream.getvalue()
 
-    def _artifact_record(self, *, expired=False, name="tab-companion-build", size=None):
+    def _release_record(self, archive, *, asset_name="tab-companion-build.zip", asset_size=None):
         return {
-            "id": 9001,
-            "name": name,
-            "expired": expired,
-            "expires_at": self.expires_at,
-            "size_in_bytes": len(self.archive) if size is None else size,
-            "archive_download_url": self.artifact_url,
+            "tag_name": "tab-companion-build-101",
+            "draft": False,
+            "prerelease": False,
+            "assets": [{
+                "name": asset_name,
+                "size": len(archive) if asset_size is None else asset_size,
+                "browser_download_url": self.release_asset_url,
+            }],
         }
 
-    def _responses(self, runs=None, artifacts=None, archive=None, download_size=None):
+    def _responses(self, runs=None, archive=None, download_size=None, asset_name="tab-companion-build.zip",
+                   asset_size=None):
         runs = [self.run] if runs is None else runs
         archive = self.archive if archive is None else archive
-        artifacts = [self._artifact_record(size=len(archive))] if artifacts is None else artifacts
+        release = self._release_record(archive, asset_name=asset_name, asset_size=asset_size)
 
         def open_url(request, timeout=None):
             url = request.full_url
             if url.startswith(self.workflow_url.split("?", 1)[0]):
                 return MemoryResponse(json.dumps({"workflow_runs": runs}).encode(), url)
-            if "/actions/runs/" in url and "/artifacts?" in url:
-                return MemoryResponse(json.dumps({"artifacts": artifacts}).encode(), url)
-            if url == self.artifact_url:
+            if url == self.release_url:
+                return MemoryResponse(json.dumps(release).encode(), url)
+            if url == self.release_asset_url:
                 headers = {"Content-Length": len(archive) if download_size is None else download_size}
-                return MemoryResponse(archive, "https://objects.githubusercontent.com/secure-artifact.zip",
+                return MemoryResponse(archive, "https://release-assets.githubusercontent.com/secure-release.zip?sig=x",
                                       "application/zip", headers)
             raise AssertionError(f"Unexpected URL: {url}")
 
@@ -151,7 +155,8 @@ class UpdatesTests(unittest.TestCase):
     def _fetch(self, **kwargs):
         with patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.cache_home)}), \
                 patch("urllib.request.urlopen", side_effect=self._responses(**kwargs)):
-            return fetch_latest_build(self.repo, expected_project="tab-companion", target=self.target)
+            return fetch_latest_build(self.repo, expected_project="tab-companion", target=self.target,
+                                      public_release=True)
 
     def test_fetch_selects_latest_successful_exact_push_build(self):
         older = self._run(run_id=99, run_number=6)
@@ -167,7 +172,7 @@ class UpdatesTests(unittest.TestCase):
         with patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.cache_home)}):
             self.assertEqual(extract_verified_asset(build).read_bytes(), self.package)
 
-    def test_api_requests_are_public_and_do_not_send_authentication(self):
+    def test_public_api_and_release_asset_requests_need_no_authentication(self):
         seen = []
         response = self._responses()
 
@@ -177,10 +182,25 @@ class UpdatesTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.cache_home)}), \
                 patch("urllib.request.urlopen", side_effect=inspect):
-            fetch_latest_build(self.repo, expected_project="tab-companion", target=self.target)
-        api_requests = [request for request in seen if "api.github.com" in request.full_url]
-        self.assertEqual(len(api_requests), 3)
-        self.assertTrue(all(request.get_header("Authorization") is None for request in api_requests))
+            fetch_latest_build(self.repo, expected_project="tab-companion", target=self.target,
+                               public_release=True)
+        requests = [request for request in seen if "api.github.com" in request.full_url]
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(all(request.get_header("Authorization") is None for request in seen))
+
+    def test_action_artifact_mode_remains_available_for_port_feeds(self):
+        archive_path = self.cache_home / "test-action-artifact.zip"
+        archive_path.write_bytes(self.archive)
+        record = {"id": 9001, "archive_download_url": self.artifact_url}
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.cache_home)}), \
+                patch.object(updates, "_latest_successful_run", return_value=self.run), \
+                patch.object(updates, "_artifact_for_run", return_value=(record, len(self.archive))), \
+                patch.object(updates, "_download_action_artifact", return_value=archive_path) as download:
+            result = fetch_latest_build(self.repo, expected_project="tab-companion", target=self.target)
+            cache = updates._cache_dir()
+        self.assertEqual(result.asset.name, "tab-companion.rpm")
+        download.assert_called_once_with(self.artifact_url, len(self.archive), run_id=101,
+                                         artifact_id=9001, cache=cache)
 
     def test_rejects_when_no_successful_push_run_exists(self):
         failed = self._run(run_id=102, run_number=8, conclusion="failure")
@@ -194,18 +214,9 @@ class UpdatesTests(unittest.TestCase):
         with self.assertRaisesRegex(UpdateError, "No build asset matches"):
             self._fetch(archive=archive)
 
-    def test_rejects_missing_or_expired_exact_artifact(self):
-        with self.assertRaisesRegex(UpdateError, "no artifact named"):
-            self._fetch(artifacts=[])
-        expired = self._artifact_record(expired=True)
-        with self.assertRaisesRegex(UpdateError, "expired"):
-            self._fetch(artifacts=[expired])
-
-    def test_rejects_expiration_timestamp_in_the_past(self):
-        expired = self._artifact_record()
-        expired["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
-        with self.assertRaisesRegex(UpdateError, "expired"):
-            self._fetch(artifacts=[expired])
+    def test_release_asset_name_is_selected_exactly(self):
+        with self.assertRaisesRegex(UpdateError, "does not contain exactly one tab-companion-build.zip"):
+            self._fetch(asset_name="tab-companion-fedora.zip")
 
     def test_rejects_artifact_with_wrong_project_or_run_identity(self):
         mismatched = self._manifest(self.run, self.package, project="another-project")
@@ -236,12 +247,12 @@ class UpdatesTests(unittest.TestCase):
             with self.assertRaisesRegex(UpdateError, "size does not match"):
                 extract_verified_asset(build)
 
-    def test_rejects_artifact_size_mismatch_and_over_limit(self):
-        with self.assertRaisesRegex(UpdateError, "differs from GitHub metadata"):
+    def test_rejects_release_asset_size_mismatch_and_over_limit(self):
+        with self.assertRaisesRegex(UpdateError, "size differs from GitHub metadata"):
             self._fetch(download_size=len(self.archive) + 1)
-        oversized = self._artifact_record(size=updates.MAX_BUILD_ARCHIVE_BYTES + 1)
+        oversized = updates.MAX_BUILD_ARCHIVE_BYTES + 1
         with self.assertRaisesRegex(UpdateError, "exceeds the size limit"):
-            self._fetch(artifacts=[oversized])
+            self._fetch(asset_size=oversized)
 
     def test_config_persists_only_github_repositories(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -276,6 +287,11 @@ class UpdatesTests(unittest.TestCase):
         self.assertEqual(self._fetch().asset.version, "1.5.0+ci")
 
     def test_device_target_and_package_manager_utilities(self):
+        self.assertEqual(APP_BUILD_ARTIFACTS, {
+            "deb": "tab-companion-ubuntu",
+            "rpm": "tab-companion-fedora",
+            "pacman": "tab-companion-arch",
+        })
         with tempfile.TemporaryDirectory() as temp:
             port_file = Path(temp) / "port.json"
             port_file.write_text(json.dumps({"device_id": "SM-X810"}), encoding="utf-8")

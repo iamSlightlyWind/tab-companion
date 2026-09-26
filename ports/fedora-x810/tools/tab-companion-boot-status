@@ -46,11 +46,6 @@ def main():
                 "ubuntu": {"total": root_total, "used": root_total - root_free, "known": True},
                 "android": {"total": android_total, "used": 0, "known": False},
             },
-            # This reflects the root-owned polkit rule managed by the app's
-            # narrowly scoped helper, not merely helper availability.
-            "noask": os.path.exists(
-                "/etc/polkit-1/rules.d/49-tab-companion-boot-switch.rules"
-            ),
         }))
         return 0
     except Exception as e:

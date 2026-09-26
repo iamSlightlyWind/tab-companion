@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: tab-companion-main-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   android:
     if: github.ref == 'refs/heads/main'
@@ -190,3 +194,75 @@ jobs:
           path: build/tab-companion-arch/
           if-no-files-found: error
           retention-days: 90
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: [android, ubuntu, fedora, arch]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out the workflow commit
+        uses: actions/checkout@v6
+
+      - name: Download the distro-specific build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: tab-companion-ubuntu
+          path: ${{ runner.temp }}/tab-companion-ubuntu
+
+      - name: Download Fedora build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: tab-companion-fedora
+          path: ${{ runner.temp }}/tab-companion-fedora
+
+      - name: Download Arch build artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: tab-companion-arch
+          path: ${{ runner.temp }}/tab-companion-arch
+
+      - name: Package public release bundles
+        env:
+          RELEASE_DIR: ${{ runner.temp }}/tab-companion-release
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          output = Path(os.environ["RELEASE_DIR"])
+          output.mkdir(parents=True, exist_ok=True)
+          for artifact in ("ubuntu", "fedora", "arch"):
+              source = root / f"tab-companion-{artifact}"
+              destination = output / f"tab-companion-{artifact}.zip"
+              members = sorted(source.iterdir())
+              if not members or any(not path.is_file() or path.is_symlink() for path in members):
+                  raise SystemExit(f"Invalid or empty {artifact} build artifact")
+              with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+                  for path in members:
+                      bundle.write(path, path.name)
+          PY
+
+      - name: Publish rolling latest successful build release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_DIR: ${{ runner.temp }}/tab-companion-release
+        run: |
+          set -euo pipefail
+          tag="tab-companion-build-${GITHUB_RUN_ID}"
+          assets=("$RELEASE_DIR/tab-companion-ubuntu.zip" \
+                  "$RELEASE_DIR/tab-companion-fedora.zip" \
+                  "$RELEASE_DIR/tab-companion-arch.zip")
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "Tab Companion build #${GITHUB_RUN_NUMBER}" \
+              --notes "Automatically updated from the successful main-branch build."
+          fi

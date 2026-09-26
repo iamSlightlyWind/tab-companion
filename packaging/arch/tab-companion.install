@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+
+_remove_legacy_boot_auth_bypass() {
+    # Older Tab Companion builds offered a switch to bypass polkit auth.
+    # Drop only that app-owned rule so boot switching requires authentication.
+    rm -f /etc/polkit-1/rules.d/49-tab-companion-boot-switch.rules
+}
+
+post_install() {
+    _remove_legacy_boot_auth_bypass
+}
+
+post_upgrade() {
+    _remove_legacy_boot_auth_bypass
+}

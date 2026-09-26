@@ -6,6 +6,7 @@ pkgdesc='Samsung Galaxy tablet S Pen, keyboard and hardware companion'
 arch=('any')
 url='https://github.com/iamSlightlyWind/tab-companion'
 license=('MIT')
+install='tab-companion.install'
 depends=('python' 'python-gobject' 'python-dbus' 'gtk4' 'libadwaita' 'glib2' 'polkit' 'systemd' 'dbus' 'gnome-shell')
 source=('tab-companion-x810.tar.gz')
 sha256sums=('@BUNDLE_SHA256@')

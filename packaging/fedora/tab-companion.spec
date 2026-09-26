@@ -37,6 +37,8 @@ mkdir -p %{_builddir}
 find %{buildroot} \( -type f -o -type l \) ! -path '%{buildroot}/usr/share/licenses/tab-companion/LICENSE' -print | sed "s|^%{buildroot}||" | sort > %{_builddir}/tab-companion.files
 
 %post
+# Remove the legacy no-password boot-switch exception created by older builds.
+rm -f /etc/polkit-1/rules.d/49-tab-companion-boot-switch.rules
 if command -v glib-compile-schemas >/dev/null 2>&1; then
     glib-compile-schemas /usr/share/glib-2.0/schemas || :
 fi

@@ -13,6 +13,7 @@ from . import VERSION
 from .aur import build_aur_package
 from .i18n import _
 from .updates import (
+    APP_BUILD_ARTIFACTS,
     APP_PROJECT,
     APP_REPO,
     UpdateConfig,
@@ -65,8 +66,8 @@ class UpdatesPage(Adw.PreferencesPage):
             default_repo=APP_REPO,
             workflow_file="build-updates.yml",
             branch="main",
-            artifact_name={"deb": "tab-companion-ubuntu", "rpm": "tab-companion-fedora",
-                           "pacman": "tab-companion-arch"}.get(self.manager, "tab-companion-fedora"),
+            artifact_name=APP_BUILD_ARTIFACTS.get(self.manager, "tab-companion-fedora"),
+            public_release=True,
             build_info_path="/usr/share/tab-companion/app-build.json",
             version=VERSION,
             description=_("Update the companion app without changing the installed Linux port."),
@@ -95,7 +96,7 @@ class UpdatesPage(Adw.PreferencesPage):
             self._set_status("port", _("No supported package manager was detected."))
 
     def _build_source(self, *, key, title, project, default_repo, workflow_file, branch,
-                      artifact_name, build_info_path, version, description):
+                      artifact_name, build_info_path, version, description, public_release=False):
         group = Adw.PreferencesGroup(title=title, description=description)
         self.add(group)
         if default_repo:
@@ -124,6 +125,7 @@ class UpdatesPage(Adw.PreferencesPage):
 
         state = {"project": project, "workflow_file": workflow_file, "branch": branch,
                  "artifact_name": artifact_name, "build_info_path": build_info_path,
+                 "public_release": public_release,
                  "version": version,
                  "repo_entry": repo_entry, "status": status, "check": check,
                  "status_icon": status_icon, "install": install, "build": None,
@@ -172,6 +174,7 @@ class UpdatesPage(Adw.PreferencesPage):
                     repo_url, expected_project=state["project"], target=self.target,
                     workflow_file=state["workflow_file"], branch=state["branch"],
                     artifact_name=state["artifact_name"],
+                    public_release=state["public_release"],
                 )
                 asset = build.asset
                 if not asset_supported_by_manager(asset, self.manager):

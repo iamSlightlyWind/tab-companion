@@ -15,15 +15,13 @@ install -m 0644 packaging/tab-companion-x810/LICENSE-upstream \
     "$stage/usr/share/licenses/tab-companion/LICENSE"
 install -m 0755 tools/x810-boot-switch-core \
     "$stage/usr/local/libexec/x810-boot-switch-core"
-for helper in tab-companion-boot-status tab-companion-boot-switch tab-companion-boot-noask; do
+for helper in tab-companion-boot-status tab-companion-boot-switch; do
     install -m 0755 "tools/$helper" "$stage/usr/local/libexec/$helper"
 done
 install -m 0755 usr/libexec/tab-companion-keyboard-recover \
     "$stage/usr/libexec/tab-companion-keyboard-recover"
 install -m 0644 packaging/io.github.agcarbajo.TabCompanion.X810.policy \
     "$stage/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.X810.policy"
-install -m 0644 packaging/io.github.agcarbajo.TabCompanion.X810.BootNoAsk.policy \
-    "$stage/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.X810.BootNoAsk.policy"
 install -m 0644 packaging/tab-companion-polkit-agent.desktop \
     "$stage/etc/xdg/autostart/tab-companion-polkit-agent.desktop"
 python3 "$app_root/tools/write-app-build-metadata.py" "$stage"

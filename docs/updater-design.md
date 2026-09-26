@@ -1,14 +1,14 @@
 # Updates from the latest successful Actions build
 
-Tab Companion does not use GitHub Releases or release tags for its shared app
-and Linux-port update channels. It queries the configured public GitHub repo
-for the newest completed, successful `push` run of a named workflow on a
-configured branch (normally `main`), then downloads that run's named Actions
-artifact. The app channel defaults to `build-updates.yml` and
+The app updater queries the configured public GitHub repository for the newest
+completed, successful `push` run, then downloads that run's matching asset from
+its public rolling build release. The release tag is keyed to that run ID; old
+build releases are deleted after the new one is published. No login is needed
+to download release assets. The app channel defaults to `build-updates.yml` and
 `tab-companion-ubuntu` on Ubuntu, `tab-companion-fedora` on Fedora, or
-`tab-companion-arch` on Arch;
-port packages can provide their own workflow, branch, artifact name, and
-build-info path in `/usr/share/tab-companion/port.json`.
+`tab-companion-arch` on Arch. Port packages can provide their own workflow,
+branch, artifact name, and build-info path in
+`/usr/share/tab-companion/port.json`.
 
 ## Artifact contract
 
@@ -46,17 +46,18 @@ file. `aur-source` assets are built with `makepkg` as the logged-in user, not
 as root; pacman installs the resulting package.
 
 The Actions workflow runs independent Ubuntu, Fedora, Arch, and Android jobs on
-pushes to `main`. Linux jobs test, build target packages, write an index, and
-upload separately named artifacts. It does not publish releases, create tags,
-or upload release assets.
-For public repositories, run and artifact metadata can be queried without
-embedding a personal access token in the app. This updater deliberately
+pushes to `main`, then publishes their indexed packages as public release assets.
+The build artifacts are still separate by distro for CI handoff; release assets
+are named `tab-companion-ubuntu.zip`, `tab-companion-fedora.zip`, and
+`tab-companion-arch.zip`.
+For public repositories, run and release metadata and assets can be fetched
+without embedding a personal access token in the app. This updater deliberately
 requires a public repo; private-repo support would need user-managed
 authentication, not a bundled credential.
 
-Actions artifacts expire (GitHub's default retention is 90 days, subject to
-repository policy), so the updater reports a missing/expired build rather than
-falling back to an older release. A successful recent build is required.
+The app update feed uses public release assets rather than the Actions artifact
+download endpoint, which returned HTTP 401 unauthenticated in testing. Port
+feeds that still use Actions artifacts retain their configured artifact expiry.
 
 ## Package-manager behavior and boundaries
 

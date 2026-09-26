@@ -25,6 +25,7 @@ out="$app_root/ports/fedora-x810/out/arch"
 mkdir -p "$out"
 archive="$out/tab-companion-aur-source.tar.gz"
 cp "$bundle" "$tmp/tab-companion-x810.tar.gz"
-tar -C "$tmp" -czf "$archive" PKGBUILD tab-companion-x810.tar.gz
+cp "$app_root/packaging/arch/tab-companion.install" "$tmp/tab-companion.install"
+tar -C "$tmp" -czf "$archive" PKGBUILD tab-companion.install tab-companion-x810.tar.gz
 sha256sum "$archive" > "$archive.sha256"
 echo "Built AUR source archive $archive (PKGBUILD builds as the user)."

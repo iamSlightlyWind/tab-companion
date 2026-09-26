@@ -19,6 +19,11 @@ from pathlib import Path
 
 APP_REPO = "https://github.com/iamSlightlyWind/tab-companion"
 APP_PROJECT = "tab-companion"
+APP_BUILD_ARTIFACTS = {
+    "deb": "tab-companion-ubuntu",
+    "rpm": "tab-companion-fedora",
+    "pacman": "tab-companion-arch",
+}
 MANIFEST_NAME = "tab-companion-update.json"
 MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_BUILD_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -320,7 +325,7 @@ def _latest_successful_run(owner, repo, workflow_file, branch):
     query = urllib.parse.urlencode({
         "branch": branch,
         "event": "push",
-        "status": "success",
+        "status": "completed",
         "per_page": 100,
     })
     url = f"{_API_BASE}/repos/{urllib.parse.quote(owner, safe='')}/{urllib.parse.quote(repo, safe='')}/actions/workflows/{workflow}/runs?{query}"
@@ -375,7 +380,7 @@ def _artifact_for_run(owner, repo, run_id, artifact_name):
     return artifact, size
 
 
-def _download_artifact(url, expected_size, *, run_id, artifact_id, cache):
+def _download_action_artifact(url, expected_size, *, run_id, artifact_id, cache):
     destination = cache / f"run-{run_id}-artifact-{artifact_id}.zip"
     temporary = cache / f".run-{run_id}-artifact-{artifact_id}.part"
     try:
@@ -392,6 +397,85 @@ def _download_artifact(url, expected_size, *, run_id, artifact_id, cache):
                     if isinstance(exc, UpdateError):
                         raise
                     raise UpdateError("Invalid artifact download Content-Length") from exc
+            total = 0
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(temporary, flags, 0o600)
+            try:
+                with os.fdopen(fd, "wb") as output:
+                    while True:
+                        block = response.read(1024 * 1024)
+                        if not block:
+                            break
+                        total += len(block)
+                        if total > MAX_BUILD_ARCHIVE_BYTES or total > expected_size:
+                            raise UpdateError("Workflow artifact exceeds its declared size")
+                        output.write(block)
+                    output.flush()
+                    os.fsync(output.fileno())
+            except Exception:
+                temporary.unlink(missing_ok=True)
+                raise
+        if total != expected_size:
+            raise UpdateError("Downloaded workflow artifact size does not match GitHub metadata")
+        os.replace(temporary, destination)
+        return destination
+    except UpdateError:
+        temporary.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        temporary.unlink(missing_ok=True)
+        raise UpdateError(f"Could not download workflow artifact: {exc}") from exc
+
+
+def _release_asset_for_run(owner, repo, run_id, artifact_name):
+    tag = f"tab-companion-build-{run_id}"
+    url = (f"{_API_BASE}/repos/{urllib.parse.quote(owner, safe='')}/"
+           f"{urllib.parse.quote(repo, safe='')}/releases/tags/{urllib.parse.quote(tag, safe='')}")
+    release = _api_json(url, label="public build release")
+    if (not isinstance(release, dict) or release.get("tag_name") != tag
+            or release.get("draft") is not False or release.get("prerelease") is not False
+            or not isinstance(release.get("assets"), list)):
+        raise UpdateError("GitHub returned an invalid public build release")
+    name = artifact_name + ".zip"
+    matches = [item for item in release["assets"]
+               if isinstance(item, dict) and item.get("name") == name]
+    if len(matches) != 1:
+        raise UpdateError(f"Build release does not contain exactly one {name}")
+    asset = matches[0]
+    size = asset.get("size")
+    if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= MAX_BUILD_ARCHIVE_BYTES:
+        raise UpdateError("Public build bundle is empty or exceeds the size limit")
+    download_url = asset.get("browser_download_url")
+    _https_url(download_url, "Release asset URL")
+    parsed = urllib.parse.urlsplit(download_url)
+    expected_path = f"/{owner}/{repo}/releases/download/{tag}/{name}"
+    if (parsed.hostname.lower() != "github.com" or parsed.path.lower() != expected_path.lower()
+            or parsed.query or parsed.fragment):
+        raise UpdateError("GitHub returned an unexpected release asset URL")
+    return download_url, size
+
+
+def _download_public_bundle(url, expected_size, *, run_id, artifact_name, cache):
+    destination = cache / f"run-{run_id}-{artifact_name}.zip"
+    temporary = cache / f".run-{run_id}-{artifact_name}.part"
+    try:
+        with urllib.request.urlopen(_request(url), timeout=90) as response:
+            final = urllib.parse.urlsplit(_https_url(response.geturl(), "Public build URL"))
+            expected = urllib.parse.urlsplit(url)
+            if (final.hostname.lower() not in ("github.com", "release-assets.githubusercontent.com")
+                    or (final.hostname.lower() == "github.com" and final.path != expected.path)):
+                raise UpdateError("Public build bundle redirected to an unexpected URL")
+            length = response.headers.get("Content-Length")
+            if length:
+                try:
+                    if int(length) != expected_size:
+                        raise UpdateError("Release asset size differs from GitHub metadata")
+                    if not 1 <= int(length) <= MAX_BUILD_ARCHIVE_BYTES:
+                        raise UpdateError("Public build bundle is empty or exceeds the size limit")
+                except ValueError as exc:
+                    if isinstance(exc, UpdateError):
+                        raise
+                    raise UpdateError("Invalid public build Content-Length") from exc
             digest_size = 0
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
             fd = os.open(temporary, flags, 0o600)
@@ -403,7 +487,7 @@ def _download_artifact(url, expected_size, *, run_id, artifact_id, cache):
                             break
                         digest_size += len(block)
                         if digest_size > MAX_BUILD_ARCHIVE_BYTES or digest_size > expected_size:
-                            raise UpdateError("Workflow artifact exceeds its declared size")
+                            raise UpdateError("Public build bundle exceeds its declared size")
                         output.write(block)
                     output.flush()
                     os.fsync(output.fileno())
@@ -414,7 +498,7 @@ def _download_artifact(url, expected_size, *, run_id, artifact_id, cache):
                     pass
                 raise
         if digest_size != expected_size:
-            raise UpdateError("Downloaded workflow artifact size does not match GitHub metadata")
+            raise UpdateError("Downloaded public build bundle size differs from GitHub metadata")
         os.replace(temporary, destination)
         return destination
     except UpdateError:
@@ -428,7 +512,7 @@ def _download_artifact(url, expected_size, *, run_id, artifact_id, cache):
             temporary.unlink()
         except OSError:
             pass
-        raise UpdateError(f"Could not download workflow artifact: {exc}") from exc
+        raise UpdateError(f"Could not download the public build bundle: {exc}") from exc
 
 
 def _read_zip_manifest(archive_path):
@@ -478,12 +562,11 @@ def _read_zip_manifest(archive_path):
 
 def fetch_latest_build(repo_url, *, expected_project, target,
                        workflow_file="build-updates.yml", branch="main",
-                       artifact_name="tab-companion-build"):
-    """Fetch the newest successful push-build artifact and choose a matching asset.
+                       artifact_name="tab-companion-build", public_release=False):
+    """Fetch the newest successful build package from a workflow artifact or public release.
 
-    The GitHub repository and Actions API must be public; no token is requested or sent.
-    The workflow artifact's ZIP must contain a flat ``tab-companion-update.json`` and
-    the package file(s) named by that manifest.
+    Public release assets do not require login. The legacy workflow-artifact mode
+    remains for configured port repos whose CI provides the required credentials.
     """
     owner, repo = _github_repo(repo_url)
     if not isinstance(expected_project, str) or not expected_project or len(expected_project) > 100:
@@ -494,13 +577,18 @@ def fetch_latest_build(repo_url, *, expected_project, target,
             or not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}\.ya?ml", workflow_file)):
         raise UpdateError("Workflow file must be a YAML filename")
     if not isinstance(artifact_name, str) or not SAFE_NAME.fullmatch(artifact_name):
-        raise UpdateError("Invalid workflow artifact name")
+        raise UpdateError("Invalid build asset name")
 
     run = _latest_successful_run(owner, repo, workflow_file, branch)
-    artifact, declared_size = _artifact_for_run(owner, repo, run["id"], artifact_name)
     cache = _cache_dir()
-    archive_path = _download_artifact(artifact["archive_download_url"], declared_size,
-                                      run_id=run["id"], artifact_id=artifact["id"], cache=cache)
+    if public_release:
+        download_url, declared_size = _release_asset_for_run(owner, repo, run["id"], artifact_name)
+        archive_path = _download_public_bundle(download_url, declared_size,
+                                               run_id=run["id"], artifact_name=artifact_name, cache=cache)
+    else:
+        artifact, declared_size = _artifact_for_run(owner, repo, run["id"], artifact_name)
+        archive_path = _download_action_artifact(artifact["archive_download_url"], declared_size,
+                                                 run_id=run["id"], artifact_id=artifact["id"], cache=cache)
     manifest, names = _read_zip_manifest(archive_path)
     asset = _parse_build_manifest(manifest, expected_project=expected_project, target=target, run=run)
     if asset.name not in names:

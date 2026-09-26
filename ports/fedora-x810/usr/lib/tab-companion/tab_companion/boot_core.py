@@ -22,12 +22,6 @@ import os
 
 SETS_DIR = "/var/lib/x810-boot-sets"
 
-# The rule that lets an active local session switch systems without a
-# password.  tab-companion-boot-noask writes and removes it; it is named here
-# so that the one place allowed to read it and the one place allowed to write
-# it cannot drift apart.
-NOASK_RULE = "/etc/polkit-1/rules.d/49-tab-companion-boot-switch.rules"
-
 # Sizes are fixed by the partition table, so a wrong or truncated file is
 # caught before anything is written.
 PARTITIONS = (
@@ -230,18 +224,6 @@ def storage():
     return info
 
 
-def noask_enabled():
-    """Whether switching systems currently skips the password prompt.
-
-    This has to be answered from root.  /etc/polkit-1/rules.d is root:polkitd
-    and 0750, so the unprivileged window cannot see the rule even when it is
-    installed, and asking polkit instead would not do: the switch action is
-    auth_admin_keep, so a recent password would make polkit answer "allowed"
-    for a few minutes and the window would report a setting nobody turned on.
-    """
-    return os.path.exists(NOASK_RULE)
-
-
 def status():
     live = live_hashes()
     current = identify(live, discover())
@@ -259,7 +241,6 @@ def status():
             for s in sets
         ],
         "storage": storage(),
-        "noask": noask_enabled(),
     }
 
 

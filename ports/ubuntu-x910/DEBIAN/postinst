@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+# Remove the old opt-out from boot-switch authentication on upgrade. This
+# file was created by Tab Companion's former "switch without password" toggle.
+rm -f /etc/polkit-1/rules.d/49-tab-companion-boot-switch.rules
+rm -f /etc/polkit-1/rules.d/49-gts9u-boot-switch.rules
+
 # Reproducible packages normalize source mtimes. A same-size edit can otherwise
 # leave a timestamp-based cache from an older release looking valid to Python.
 if command -v py3clean >/dev/null 2>&1; then
