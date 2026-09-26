@@ -63,7 +63,7 @@ class UpdatesPage(Adw.PreferencesPage):
         # the surrounding preference rows or changing their labels.
         self._button_css = Gtk.CssProvider()
         self._button_css.load_from_data(
-            b"button.update-action { min-height: 28px; padding: 2px 8px; }"
+            b"button.update-action { min-height: 28px; padding-top: 2px; padding-bottom: 2px; }"
         )
         display = Gdk.Display.get_default()
         if display is not None:

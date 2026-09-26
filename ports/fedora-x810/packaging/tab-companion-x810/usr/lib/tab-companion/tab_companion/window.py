@@ -198,7 +198,7 @@ class CompanionWindow(Adw.ApplicationWindow):
                 self._system_page(), "dualboot", _("Dualboot"), "drive-multidisk-symbolic"
             )
         self.view_stack.add_titled_with_icon(
-            UpdatesPage(self), "updates", _("Update"), "software-update-available-symbolic"
+            UpdatesPage(self), "updates", _("Updates"), "software-update-available-symbolic"
         )
         if legacy_ubuntu_update_available():
             # The preserved upstream APT/dpkg port updater includes the X910

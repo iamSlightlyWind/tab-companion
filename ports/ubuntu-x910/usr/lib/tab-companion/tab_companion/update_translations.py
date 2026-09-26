@@ -3,7 +3,6 @@ ES = {
     "Your build is newer": "Tu build es más reciente",
     "The latest GitHub release is older than your installed build.": "La última release de GitHub es anterior a tu build instalada.",
     "Keep your tablet up to date.": "Mantén tu tablet al día.",
-    "Update": "Actualización",
     "Download update": "Descargar actualización",
     "Download": "Descarga",
     "Verify": "Verificación",

@@ -50,7 +50,6 @@ TRANSLATIONS = {
     "Preparation stopped": ("Préparation interrompue", "Vorbereitung angehalten", "Preparazione interrotta", "Preparação interrompida"),
     "Stopped": ("Interrompu", "Angehalten", "Interrotto", "Interrompido"),
     "You can choose another build or check again.": ("Vous pouvez choisir une autre version ou relancer la recherche.", "Du kannst eine andere Version wählen oder erneut suchen.", "Puoi scegliere un’altra versione o ripetere la ricerca.", "Podes escolher outra versão ou procurar novamente."),
-    "Update": ("Mise à jour", "Aktualisierung", "Aggiornamento", "Atualização"),
     "Updates": ("Mises à jour", "Aktualisierungen", "Aggiornamenti", "Atualizações"),
     "System updates": ("Mises à jour du système", "Systemaktualisierungen", "Aggiornamenti di sistema", "Atualizações do sistema"),
     "Installed build": ("Version installée", "Installierte Version", "Versione installata", "Versão instalada"),
