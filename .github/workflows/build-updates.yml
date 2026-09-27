@@ -23,6 +23,7 @@ on:
       - 'LICENSE'
       - '.github/workflows/build-updates.yml'
       - '.github/workflows/cleanup-build-releases.yml'
+  workflow_call: {}
   workflow_dispatch:
 
 permissions:
@@ -246,6 +247,7 @@ jobs:
           fi
 
       - name: Remove superseded build releases and temporary artifacts
+        if: ${{ github.event_name == 'push' && github.workflow != 'Reset Tab Companion builds' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}

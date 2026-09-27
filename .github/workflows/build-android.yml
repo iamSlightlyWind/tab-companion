@@ -8,6 +8,7 @@ on:
       - 'tools/make_android_release_manifest.py'
       - 'tests/test_android_release_manifest.py'
       - '.github/workflows/build-android.yml'
+  workflow_call: {}
   workflow_dispatch:
 
 permissions:

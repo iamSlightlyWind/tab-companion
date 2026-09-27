@@ -1,0 +1,122 @@
+name: Reset Tab Companion builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type RESET TAB COMPANION BUILDS to rebuild every app and prune prior artifacts
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: tab-companion-reset-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-and-clear-caches:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require explicit destructive-action confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || {
+            echo "Reset is allowed only from main." >&2; exit 1;
+          }
+          [[ "$CONFIRMATION" == "RESET TAB COMPANION BUILDS" ]] || {
+            echo "Type the exact confirmation phrase; no caches or releases were changed." >&2
+            exit 1
+          }
+
+      - name: Wait for active package builds before resetting caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for workflow in build-updates.yml build-android.yml; do
+            for attempt in $(seq 1 120); do
+              active=$(gh api \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?branch=main&per_page=100" \
+                --jq '[.workflow_runs[] | select(.status == "queued" or .status == "in_progress")] | length')
+              [[ "$active" == 0 ]] && break
+              if [[ "$attempt" == 120 ]]; then
+                echo "Timed out waiting for $workflow to finish." >&2
+                exit 1
+              fi
+              sleep 15
+            done
+          done
+
+      - name: Flush old GitHub Actions build caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ids=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" \
+            --jq '.actions_caches[].id')
+          while IFS= read -r id; do
+            [[ "$id" =~ ^[0-9]+$ ]] || continue
+            gh api --method DELETE \
+              "repos/$GITHUB_REPOSITORY/actions/caches/$id" >/dev/null
+          done <<< "$ids"
+          echo "Cleared old app build caches."
+
+  linux-build:
+    needs: validate-and-clear-caches
+    uses: ./.github/workflows/build-updates.yml
+    permissions:
+      actions: write
+      contents: write
+
+  android-build:
+    needs: validate-and-clear-caches
+    uses: ./.github/workflows/build-android.yml
+    permissions:
+      contents: write
+
+  prune-old-artifacts:
+    needs: [linux-build, android-build]
+    if: success()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Remove old run-keyed releases and package artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESET_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          latest_push_run=$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/build-updates.yml/runs?branch=main&event=push&status=completed&per_page=100" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | max_by(.run_number).id // empty' 2>/dev/null || true)
+          keep_push_tag=""
+          [[ -z "$latest_push_run" ]] || keep_push_tag="tab-companion-build-${latest_push_run}"
+          tags=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+            --json tagName --jq '.[].tagName | select(startswith("tab-companion-build-"))')
+          while IFS= read -r tag; do
+            [[ "$tag" =~ ^tab-companion-build-([0-9]+)$ ]] || continue
+            old_run_id="${BASH_REMATCH[1]}"
+            [[ "$tag" == "tab-companion-build-${RESET_RUN_ID}" || \
+               "$tag" == "$keep_push_tag" ]] && continue
+            if (( old_run_id < RESET_RUN_ID )); then
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+            fi
+          done <<< "$tags"
+
+          artifact_rows=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name == "tab-companion-ubuntu" or .name == "tab-companion-fedora" or .name == "tab-companion-arch" or .name == "tab-companion-android-apk") | [.id, (.workflow_run.id // 0), .expired] | @tsv')
+          while IFS=$'\t' read -r artifact_id source_run_id expired; do
+            [[ "$artifact_id" =~ ^[0-9]+$ && "$source_run_id" =~ ^[0-9]+$ ]] || continue
+            [[ "$expired" == true ]] && continue
+            if (( source_run_id <= RESET_RUN_ID )); then
+              gh api --method DELETE \
+                "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id" >/dev/null
+            fi
+          done <<< "$artifact_rows"
+          echo "Kept the reset build and latest push-keyed update; removed older run artifacts."
