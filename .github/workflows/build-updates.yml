@@ -103,7 +103,7 @@ jobs:
         run: mkdir -p "$RUNNER_TEMP/fedora44-libdnf5-cache"
 
       - name: Cache Fedora 44 build-tool RPMs and metadata
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (Node.js 24)
         with:
           path: ${{ runner.temp }}/fedora44-libdnf5-cache
           key: fedora44-libdnf5-v1-${{ hashFiles('packaging/fedora/tab-companion.spec', 'tools/build-fedora-rpm.sh') }}
