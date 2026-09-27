@@ -3,7 +3,7 @@
 The app updater queries the configured public GitHub repository for the newest
 completed, successful `push` run, then downloads that run's matching asset from
 its public run-keyed build release. The release tag is keyed to that run ID;
-the cleanup workflow removes superseded build releases and the temporary
+the Linux publish job removes superseded build releases and its temporary
 Ubuntu/Fedora/Arch Actions package artifacts after publication. No login is
 needed to download release assets. The app channel defaults to
 `build-updates.yml` and `tab-companion-ubuntu` on Ubuntu,
@@ -97,8 +97,10 @@ authentication, not a bundled credential.
 
 The app update feed uses public release assets rather than the Actions artifact
 download endpoint, which returned HTTP 401 unauthenticated in testing. Release
-cleanup runs only after a successful publish, so failed builds preserve the
-last good updater package.
+cleanup is part of the successful Linux publish job, so failed builds preserve
+the last good updater package. Android stays separate because the Linux updater
+selects the newest successful Linux workflow run and requires its exact-run
+artifact; an Android-only run in that feed would break existing clients.
 
 ## Package-manager behavior and boundaries
 

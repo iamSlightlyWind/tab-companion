@@ -194,7 +194,7 @@ jobs:
     needs: [ubuntu, fedora, arch]
     runs-on: ubuntu-24.04
     permissions:
-      actions: read
+      actions: write
       contents: write
     steps:
       - name: Check out the workflow commit
@@ -244,3 +244,29 @@ jobs:
               --target "$GITHUB_SHA" --title "Tab Companion build #${GITHUB_RUN_NUMBER}" \
               --notes "Automatically updated from the successful main-branch build."
           fi
+
+      - name: Remove superseded build releases and temporary artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Run IDs increase monotonically. Delete only older releases so a
+          # delayed earlier run can never prune the release from a newer run.
+          tags=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+            --json tagName --jq '.[].tagName | select(startswith("tab-companion-build-"))')
+          while IFS= read -r tag; do
+            [[ "$tag" =~ ^tab-companion-build-([0-9]+)$ ]] || continue
+            old_run_id="${BASH_REMATCH[1]}"
+            if (( old_run_id < GITHUB_RUN_ID )); then
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+            fi
+          done <<< "$tags"
+
+          artifact_ids=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name == "tab-companion-ubuntu" or .name == "tab-companion-fedora" or .name == "tab-companion-arch") | .id')
+          while IFS= read -r id; do
+            [[ "$id" =~ ^[0-9]+$ ]] || continue
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+          done <<< "$artifact_ids"
