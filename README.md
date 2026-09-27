@@ -35,9 +35,15 @@ Launch **Tab Companion** from the app grid or run `tab-companion`.
 In Tab Companion, open **Updates**, select **Tab Companion**, then choose
 **Check** and **Install update**. It downloads the package from the latest
 successful `main` build and verifies its checksum. New commits pushed to `main`
-run independent Ubuntu, Fedora, Arch, and Android jobs. A rolling public GitHub
-Release is updated after a successful run; only the newest build release is kept.
-The Android switcher remains a separate Actions artifact.
+run the Linux package workflow only when its Linux package/build inputs changed;
+that workflow builds Ubuntu, Fedora, and Arch packages together because each
+release manifest is bound to that workflow run. Android switcher source changes
+use a separate workflow, whose latest APK is available from the
+[Android switcher release](https://github.com/iamSlightlyWind/tab-companion/releases/tag/tab-companion-android-latest).
+This separation keeps Android-only successful runs from breaking Linux updater
+provenance checks. If a component has no relevant source change, its last
+successful public package remains the current one; old outputs are not
+re-stamped as a new build.
 
 ## Reinstall or roll back
 

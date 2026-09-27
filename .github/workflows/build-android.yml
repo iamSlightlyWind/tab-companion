@@ -1,0 +1,109 @@
+name: Build Tab Companion Android switcher
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android-app/bootswitcher/**'
+      - 'tools/make_android_release_manifest.py'
+      - 'tests/test_android_release_manifest.py'
+      - '.github/workflows/build-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tab-companion-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      APP_BUILD_RUN_ID: ${{ github.run_id }}
+      APP_BUILD_RUN_NUMBER: ${{ github.run_number }}
+      APP_BUILD_HEAD_SHA: ${{ github.sha }}
+      APP_BUILD_BRANCH: ${{ github.ref_name }}
+    steps:
+      - name: Check out the workflow commit
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Locate Android SDK
+        id: android-sdk
+        run: echo "path=$ANDROID_HOME" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pinned Android SDK packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.android-sdk.outputs.path }}/platforms/android-35
+            ${{ steps.android-sdk.outputs.path }}/build-tools/35.0.0
+          key: android-sdk-ubuntu-24-35-35.0.0-v1
+
+      - name: Install pinned Android SDK packages
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Set up Gradle 8.14.2
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.14.2'
+
+      - name: Test and assemble APK
+        working-directory: android-app/bootswitcher
+        run: gradle testDebugUnitTest assembleDebug
+
+      - name: Prepare APK and provenance manifest
+        run: |
+          set -euo pipefail
+          mkdir -p build/tab-companion-android
+          cp android-app/bootswitcher/app/build/outputs/apk/debug/app-debug.apk \
+            build/tab-companion-android/tab-companion-android.apk
+          python3 tools/make_android_release_manifest.py \
+            build/tab-companion-android/tab-companion-android.apk \
+            build/tab-companion-android/tab-companion-android-build.json \
+            android-app/bootswitcher/app/build.gradle.kts
+
+      - name: Upload Android APK for this workflow run
+        uses: actions/upload-artifact@v6
+        with:
+          name: tab-companion-android-apk
+          path: build/tab-companion-android/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish durable latest Android APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag=tab-companion-android-latest
+          apk=build/tab-companion-android/tab-companion-android.apk
+          manifest=build/tab-companion-android/tab-companion-android-build.json
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "Tab Companion Android switcher (latest)" \
+              --notes "Latest successful Android switcher build. The JSON asset records source and APK SHA-256." \
+              --latest=false
+          else
+            gh release create "$tag" "$apk" "$manifest" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "Tab Companion Android switcher (latest)" \
+              --notes "Latest successful Android switcher build. The JSON asset records source and APK SHA-256." \
+              --latest=false
+          fi

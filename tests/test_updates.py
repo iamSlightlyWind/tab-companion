@@ -120,31 +120,36 @@ class UpdatesTests(unittest.TestCase):
                 archive.writestr(name, body)
         return stream.getvalue()
 
-    def _release_record(self, archive, *, asset_name="tab-companion-build.zip", asset_size=None):
+    def _release_record(self, archive, *, tag="tab-companion-build-101",
+                        asset_name="tab-companion-build.zip", asset_url=None, asset_size=None):
         return {
-            "tag_name": "tab-companion-build-101",
+            "tag_name": tag,
             "draft": False,
             "prerelease": False,
             "assets": [{
                 "name": asset_name,
                 "size": len(archive) if asset_size is None else asset_size,
-                "browser_download_url": self.release_asset_url,
+                "browser_download_url": asset_url or self.release_asset_url,
             }],
         }
 
     def _responses(self, runs=None, archive=None, download_size=None, asset_name="tab-companion-build.zip",
-                   asset_size=None):
+                   asset_size=None, tag_prefix="tab-companion-build"):
         runs = [self.run] if runs is None else runs
         archive = self.archive if archive is None else archive
-        release = self._release_record(archive, asset_name=asset_name, asset_size=asset_size)
+        tag = f"{tag_prefix}-101"
+        release_url = f"https://api.github.com/repos/example/tab-companion/releases/tags/{tag}"
+        asset_url = f"https://github.com/example/tab-companion/releases/download/{tag}/{asset_name}"
+        release = self._release_record(archive, tag=tag, asset_name=asset_name,
+                                       asset_url=asset_url, asset_size=asset_size)
 
         def open_url(request, timeout=None):
             url = request.full_url
             if url.startswith(self.workflow_url.split("?", 1)[0]):
                 return MemoryResponse(json.dumps({"workflow_runs": runs}).encode(), url)
-            if url == self.release_url:
+            if url == release_url:
                 return MemoryResponse(json.dumps(release).encode(), url)
-            if url == self.release_asset_url:
+            if url == asset_url:
                 headers = {"Content-Length": len(archive) if download_size is None else download_size}
                 return MemoryResponse(archive, "https://release-assets.githubusercontent.com/secure-release.zip?sig=x",
                                       "application/zip", headers)
@@ -153,10 +158,13 @@ class UpdatesTests(unittest.TestCase):
         return open_url
 
     def _fetch(self, **kwargs):
+        expected_project = kwargs.pop("expected_project", "tab-companion")
+        response_options = {key: kwargs.pop(key) for key in tuple(kwargs)
+                            if key in {"tag_prefix", "asset_name", "asset_size", "download_size", "runs", "archive"}}
         with patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.cache_home)}), \
-                patch("urllib.request.urlopen", side_effect=self._responses(**kwargs)):
-            return fetch_latest_build(self.repo, expected_project="tab-companion", target=self.target,
-                                      public_release=True)
+                patch("urllib.request.urlopen", side_effect=self._responses(**response_options)):
+            return fetch_latest_build(self.repo, expected_project=expected_project, target=self.target,
+                                      public_release=True, **kwargs)
 
     def test_fetch_selects_latest_successful_exact_push_build(self):
         older = self._run(run_id=99, run_number=6)
@@ -187,6 +195,25 @@ class UpdatesTests(unittest.TestCase):
         requests = [request for request in seen if "api.github.com" in request.full_url]
         self.assertEqual(len(requests), 2)
         self.assertTrue(all(request.get_header("Authorization") is None for request in seen))
+
+    def test_public_release_tag_prefix_is_configurable_for_port_feeds(self):
+        manifest = self._manifest(self.run, self.package, project="x810-fedora")
+        manifest["assets"][0].update({
+            "name": "x810-fedora-port-0.1.0-1000000.42.fc44.noarch.rpm",
+            "package_name": "x810-fedora-port",
+            "package_version": "0.1.0-1000000.42.fc44",
+        })
+        build = self._fetch(expected_project="x810-fedora", release_tag_prefix="x810-fedora-port-build",
+                            tag_prefix="x810-fedora-port-build",
+                            artifact_name="x810-fedora-port", asset_name="x810-fedora-port.zip",
+                            archive=self._zip(manifest, {manifest["assets"][0]["name"]: self.package}))
+        self.assertEqual(build.asset.project, "x810-fedora")
+        self.assertEqual(build.run_id, 101)
+        self.assertEqual(build.asset.package_name, "x810-fedora-port")
+
+    def test_rejects_unsafe_public_release_prefix(self):
+        with self.assertRaisesRegex(UpdateError, "Invalid public build release tag prefix"):
+            self._fetch(release_tag_prefix="../bad")
 
     def test_action_artifact_mode_remains_available_for_port_feeds(self):
         archive_path = self.cache_home / "test-action-artifact.zip"

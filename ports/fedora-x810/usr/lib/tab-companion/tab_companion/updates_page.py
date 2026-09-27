@@ -79,6 +79,7 @@ class UpdatesPage(Adw.PreferencesPage):
             branch="main",
             artifact_name=APP_BUILD_ARTIFACTS.get(self.manager, "tab-companion-fedora"),
             public_release=True,
+            release_tag_prefix="tab-companion-build",
             build_info_path="/usr/share/tab-companion/app-build.json",
             version=VERSION,
             description=_("Update the companion app without changing the installed Linux port."),
@@ -98,6 +99,10 @@ class UpdatesPage(Adw.PreferencesPage):
                 workflow_file=self.record.get("workflow_file", "build-updates.yml"),
                 branch=self.record.get("branch", "main"),
                 artifact_name=self.record.get("artifact_name", "port-build"),
+                public_release=self.record.get("public_release") is True,
+                release_tag_prefix=self.record.get(
+                    "release_tag_prefix", f"{port_id}-build"
+                ),
                 build_info_path=self.record.get("build_info_path", "/usr/share/tab-companion/port-build.json"),
                 version=port_version,
                 description=_("Update the Linux port packages. Kernel and boot images remain manual TWRP updates."),
@@ -107,7 +112,8 @@ class UpdatesPage(Adw.PreferencesPage):
             self._set_status("port", _("No supported package manager was detected."))
 
     def _build_source(self, *, key, title, project, default_repo, workflow_file, branch,
-                      artifact_name, build_info_path, version, description, public_release=False):
+                      artifact_name, build_info_path, version, description, public_release=False,
+                      release_tag_prefix="tab-companion-build"):
         group = Adw.PreferencesGroup(title=title, description=description)
         self.add(group)
         if default_repo:
@@ -138,7 +144,7 @@ class UpdatesPage(Adw.PreferencesPage):
 
         state = {"project": project, "workflow_file": workflow_file, "branch": branch,
                  "artifact_name": artifact_name, "build_info_path": build_info_path,
-                 "public_release": public_release,
+                 "public_release": public_release, "release_tag_prefix": release_tag_prefix,
                  "version": version,
                  "repo_entry": repo_entry, "status": status, "check": check,
                  "status_icon": status_icon, "install": install, "build": None,
@@ -188,6 +194,7 @@ class UpdatesPage(Adw.PreferencesPage):
                     workflow_file=state["workflow_file"], branch=state["branch"],
                     artifact_name=state["artifact_name"],
                     public_release=state["public_release"],
+                    release_tag_prefix=state["release_tag_prefix"],
                 )
                 asset = build.asset
                 if not asset_supported_by_manager(asset, self.manager):

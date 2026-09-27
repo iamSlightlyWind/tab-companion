@@ -21,6 +21,7 @@ htmlcov/
 /dist/
 **/out/
 artifacts/
+.local/
 
 # Editor/OS noise and local logs
 .DS_Store

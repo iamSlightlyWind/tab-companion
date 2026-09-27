@@ -427,8 +427,8 @@ def _download_action_artifact(url, expected_size, *, run_id, artifact_id, cache)
         raise UpdateError(f"Could not download workflow artifact: {exc}") from exc
 
 
-def _release_asset_for_run(owner, repo, run_id, artifact_name):
-    tag = f"tab-companion-build-{run_id}"
+def _release_asset_for_run(owner, repo, run_id, artifact_name, release_tag_prefix):
+    tag = f"{release_tag_prefix}-{run_id}"
     url = (f"{_API_BASE}/repos/{urllib.parse.quote(owner, safe='')}/"
            f"{urllib.parse.quote(repo, safe='')}/releases/tags/{urllib.parse.quote(tag, safe='')}")
     release = _api_json(url, label="public build release")
@@ -562,11 +562,13 @@ def _read_zip_manifest(archive_path):
 
 def fetch_latest_build(repo_url, *, expected_project, target,
                        workflow_file="build-updates.yml", branch="main",
-                       artifact_name="tab-companion-build", public_release=False):
+                       artifact_name="tab-companion-build", public_release=False,
+                       release_tag_prefix="tab-companion-build"):
     """Fetch the newest successful build package from a workflow artifact or public release.
 
-    Public release assets do not require login. The legacy workflow-artifact mode
-    remains for configured port repos whose CI provides the required credentials.
+    Public release assets do not require login. The artifact-API mode remains
+    for compatibility with older port feeds, but public-release mode is the
+    preferred channel because Actions artifacts expire and may require auth.
     """
     owner, repo = _github_repo(repo_url)
     if not isinstance(expected_project, str) or not expected_project or len(expected_project) > 100:
@@ -578,11 +580,16 @@ def fetch_latest_build(repo_url, *, expected_project, target,
         raise UpdateError("Workflow file must be a YAML filename")
     if not isinstance(artifact_name, str) or not SAFE_NAME.fullmatch(artifact_name):
         raise UpdateError("Invalid build asset name")
+    if (not isinstance(release_tag_prefix, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,150}", release_tag_prefix)):
+        raise UpdateError("Invalid public build release tag prefix")
 
     run = _latest_successful_run(owner, repo, workflow_file, branch)
     cache = _cache_dir()
     if public_release:
-        download_url, declared_size = _release_asset_for_run(owner, repo, run["id"], artifact_name)
+        download_url, declared_size = _release_asset_for_run(
+            owner, repo, run["id"], artifact_name, release_tag_prefix
+        )
         archive_path = _download_public_bundle(download_url, declared_size,
                                                run_id=run["id"], artifact_name=artifact_name, cache=cache)
     else:
