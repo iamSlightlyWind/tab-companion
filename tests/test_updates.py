@@ -211,6 +211,20 @@ class UpdatesTests(unittest.TestCase):
         self.assertEqual(build.run_id, 101)
         self.assertEqual(build.asset.package_name, "x810-fedora-port")
 
+    def test_legacy_x810_port_config_accepts_concise_update_zip_name(self):
+        manifest = self._manifest(self.run, self.package, project="x810-fedora")
+        manifest["assets"][0].update({
+            "name": "x810-fedora-port-0.1.0-1000000.42.fc44.noarch.rpm",
+            "package_name": "x810-fedora-port",
+            "package_version": "0.1.0-1000000.42.fc44",
+        })
+        build = self._fetch(expected_project="x810-fedora", release_tag_prefix="x810-fedora-port-build",
+                            tag_prefix="x810-fedora-port-build", artifact_name="x810-fedora-port",
+                            asset_name="update.zip",
+                            archive=self._zip(manifest, {manifest["assets"][0]["name"]: self.package}))
+        self.assertEqual(build.asset.project, "x810-fedora")
+        self.assertEqual(build.asset.package_name, "x810-fedora-port")
+
     def test_legacy_x810_port_config_resolves_to_combined_workflow(self):
         self.assertEqual(
             updates._effective_workflow_file("iamSlightlyWind", "x810-fedroid", "port-updates.yml"),

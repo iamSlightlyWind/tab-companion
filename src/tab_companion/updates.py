@@ -441,7 +441,8 @@ def _download_action_artifact(url, expected_size, *, run_id, artifact_id, cache)
         raise UpdateError(f"Could not download workflow artifact: {exc}") from exc
 
 
-def _release_asset_for_run(owner, repo, run_id, artifact_name, release_tag_prefix):
+def _release_asset_for_run(owner, repo, run_id, artifact_name, release_tag_prefix,
+                           expected_project=None):
     tag = f"{release_tag_prefix}-{run_id}"
     url = (f"{_API_BASE}/repos/{urllib.parse.quote(owner, safe='')}/"
            f"{urllib.parse.quote(repo, safe='')}/releases/tags/{urllib.parse.quote(tag, safe='')}")
@@ -453,6 +454,15 @@ def _release_asset_for_run(owner, repo, run_id, artifact_name, release_tag_prefi
     name = artifact_name + ".zip"
     matches = [item for item in release["assets"]
                if isinstance(item, dict) and item.get("name") == name]
+    # Existing X810 installs have the old port.json artifact_name. New X810
+    # releases use the concise update.zip name; accept that alias for the
+    # Fedora port only so installed apps can update the port.json that carries
+    # the new artifact name. The bundle manifest still validates project,
+    # target, run identity and the selected RPM after download.
+    if not matches and expected_project == "x810-fedora":
+        name = "update.zip"
+        matches = [item for item in release["assets"]
+                   if isinstance(item, dict) and item.get("name") == name]
     if len(matches) != 1:
         raise UpdateError(f"Build release does not contain exactly one {name}")
     asset = matches[0]
@@ -603,7 +613,7 @@ def fetch_latest_build(repo_url, *, expected_project, target,
     cache = _cache_dir()
     if public_release:
         download_url, declared_size = _release_asset_for_run(
-            owner, repo, run["id"], artifact_name, release_tag_prefix
+            owner, repo, run["id"], artifact_name, release_tag_prefix, expected_project
         )
         archive_path = _download_public_bundle(download_url, declared_size,
                                                run_id=run["id"], artifact_name=artifact_name, cache=cache)
