@@ -211,6 +211,16 @@ class UpdatesTests(unittest.TestCase):
         self.assertEqual(build.run_id, 101)
         self.assertEqual(build.asset.package_name, "x810-fedora-port")
 
+    def test_legacy_x810_port_config_resolves_to_combined_workflow(self):
+        self.assertEqual(
+            updates._effective_workflow_file("iamSlightlyWind", "x810-fedroid", "port-updates.yml"),
+            "x810-fedora.yml",
+        )
+        self.assertEqual(
+            updates._effective_workflow_file("example", "x810-fedroid", "port-updates.yml"),
+            "port-updates.yml",
+        )
+
     def test_rejects_unsafe_public_release_prefix(self):
         with self.assertRaisesRegex(UpdateError, "Invalid public build release tag prefix"):
             self._fetch(release_tag_prefix="../bad")

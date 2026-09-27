@@ -40,6 +40,7 @@ SAFE_PACKAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_@-]{0,127}$")
 FORMATS = {"rpm", "deb", "pacman-local", "aur-source"}
 _USER_AGENT = "Tab-Companion-Updater/1"
 _API_BASE = "https://api.github.com"
+_X810_PORT_REPO = ("iamslightlywind", "x810-fedroid")
 
 
 class UpdateError(ValueError):
@@ -76,6 +77,19 @@ def _github_repo(repo_url):
     if parts[0] in ("", ".", "..") or parts[1] in ("", ".", ".."):
         raise UpdateError("Invalid GitHub repository URL")
     return parts[0], parts[1]
+
+
+def _effective_workflow_file(owner, repo, workflow_file):
+    """Map installed X810 feeds from the retired standalone workflow to the combined one.
+
+    This lets already-installed Tab Companion versions read their old
+    ``port-updates.yml`` port.json while the Fedora port now publishes from
+    the ``build_port_update`` job in ``x810-fedora.yml``.
+    """
+    if ((owner.lower(), repo.lower()) == _X810_PORT_REPO
+            and workflow_file == "port-updates.yml"):
+        return "x810-fedora.yml"
+    return workflow_file
 
 
 def _cache_dir():
@@ -584,6 +598,7 @@ def fetch_latest_build(repo_url, *, expected_project, target,
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,150}", release_tag_prefix)):
         raise UpdateError("Invalid public build release tag prefix")
 
+    workflow_file = _effective_workflow_file(owner, repo, workflow_file)
     run = _latest_successful_run(owner, repo, workflow_file, branch)
     cache = _cache_dir()
     if public_release:

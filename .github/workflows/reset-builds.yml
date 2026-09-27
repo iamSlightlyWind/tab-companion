@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type RESET TAB COMPANION BUILDS to rebuild every app and prune prior artifacts
+        description: Type RESET TAB COMPANION BUILDS to rebuild every app and prune old artifacts (dependency caches are kept)
         required: true
         type: string
 
@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate-and-clear-caches:
+  validate-and-wait:
     runs-on: ubuntu-24.04
     steps:
       - name: Require explicit destructive-action confirmation
@@ -33,7 +33,7 @@ jobs:
             exit 1
           }
 
-      - name: Wait for active package builds before resetting caches
+      - name: Wait for active package builds before the clean rebuild
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -52,30 +52,15 @@ jobs:
             done
           done
 
-      - name: Flush old GitHub Actions build caches
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          ids=$(gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" \
-            --jq '.actions_caches[].id')
-          while IFS= read -r id; do
-            [[ "$id" =~ ^[0-9]+$ ]] || continue
-            gh api --method DELETE \
-              "repos/$GITHUB_REPOSITORY/actions/caches/$id" >/dev/null
-          done <<< "$ids"
-          echo "Cleared old app build caches."
-
   linux-build:
-    needs: validate-and-clear-caches
+    needs: validate-and-wait
     uses: ./.github/workflows/build-updates.yml
     permissions:
       actions: write
       contents: write
 
   android-build:
-    needs: validate-and-clear-caches
+    needs: validate-and-wait
     uses: ./.github/workflows/build-android.yml
     permissions:
       contents: write
@@ -114,9 +99,9 @@ jobs:
           while IFS=$'\t' read -r artifact_id source_run_id expired; do
             [[ "$artifact_id" =~ ^[0-9]+$ && "$source_run_id" =~ ^[0-9]+$ ]] || continue
             [[ "$expired" == true ]] && continue
-            if (( source_run_id <= RESET_RUN_ID )); then
+            if (( source_run_id < RESET_RUN_ID )); then
               gh api --method DELETE \
                 "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id" >/dev/null
             fi
           done <<< "$artifact_rows"
-          echo "Kept the reset build and latest push-keyed update; removed older run artifacts."
+          echo "Kept the reset build and latest push-keyed update; removed older public/run artifacts. GitHub build caches were preserved."

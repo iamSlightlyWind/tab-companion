@@ -122,10 +122,10 @@ compromised repository owner or workflow.
 
 For an intentional clean-build sanity check, run **Actions → Reset Tab
 Companion builds** on `main` and enter `RESET TAB COMPANION BUILDS`. It waits
-for active app builds, removes repository Actions caches, rebuilds Ubuntu,
-Fedora, Arch, and the Android switcher, then removes superseded run-keyed Linux
-releases and older package artifacts after both build pipelines succeed. It
-retains the latest push-keyed Linux release because installed updaters use that
-exact run identity; the reset run is a sanity build, not a replacement for the
-push update feed. Normal push builds still rebuild packages from source but
-reuse dependency caches.
+for active app builds, rebuilds Ubuntu, Fedora, Arch, and the Android switcher,
+then removes superseded run-keyed Linux releases and older package artifacts
+after both build pipelines succeed. It does not delete GitHub Actions caches:
+dependency downloads remain cached, while packages/APKs are rebuilt from the
+current source. It retains the latest push-keyed Linux release because
+installed updaters use that exact run identity; the reset run is a sanity
+build, not a replacement for the push update feed.
