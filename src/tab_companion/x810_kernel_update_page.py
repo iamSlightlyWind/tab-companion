@@ -61,7 +61,7 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
         self.folder_row = folder_row
         if self.backup_folder:
             self.folder_row.set_subtitle(
-                _("Backups will be saved under {path}/<build number>/files.").format(
+                _("Backups will be saved under {path}/BUILD_NUMBER/files.").format(
                     path=os.path.join(self.backup_folder, BACKUP_CONTAINER)
                 )
             )
@@ -106,7 +106,7 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
             self.backup_device = save_backup_folder(path)
             self.backup_folder = path
             output = os.path.join(path, BACKUP_CONTAINER)
-            self.folder_row.set_subtitle(_("Backups will be saved under {path}/<build number>/files.").format(path=output))
+            self.folder_row.set_subtitle(_("Backups will be saved under {path}/BUILD_NUMBER/files.").format(path=output))
             self._refresh_apply()
         except Exception as error:
             # The native chooser reports cancellation as a GLib error. Keep the
