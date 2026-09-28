@@ -10,46 +10,87 @@ BACKEND = "/usr/local/libexec/x810-boot-switch-core"
 BASE = "/var/lib/x810-boot-sets"
 
 
-def main():
+def _backend_status(backend=BACKEND, runner=None):
+    runner = runner or subprocess.run
+    result = runner([backend, "status"], check=False, text=True,
+                    capture_output=True, timeout=180)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        # The backend emits structured diagnostics on stdout. Preserve the
+        # human-readable cause instead of surfacing an opaque JSON blob.
+        try:
+            detail = json.loads(detail).get("error") or detail
+        except (TypeError, ValueError, AttributeError):
+            pass
+        raise RuntimeError(detail or f"boot status backend exited {result.returncode}")
+    raw = json.loads(result.stdout)
+    if not isinstance(raw, dict):
+        raise RuntimeError("boot status backend returned invalid JSON data")
+    return raw
+
+
+def _storage(stat_path="/", android_device="/dev/sda34", statvfs=None,
+             check_output=None):
+    """Collect best-effort storage details; never gate boot status on these."""
+    statvfs = statvfs or os.statvfs
+    check_output = check_output or subprocess.check_output
+    storage = {}
     try:
-        result = subprocess.run([BACKEND, "status"], check=False, text=True,
-                                capture_output=True, timeout=180)
-        if result.returncode != 0:
-            detail = result.stderr.strip() or result.stdout.strip()
-            raise RuntimeError(detail or f"boot status backend exited {result.returncode}")
-        raw = json.loads(result.stdout)
-        sets = []
-        for set_id in ("fedora", "android"):
-            if set_id not in raw.get("ready", {}):
-                continue
-            label = "Android" if set_id == "android" else "Fedora"
-            try:
-                with open(f"{BASE}/{set_id}/name.txt", encoding="utf-8") as f:
-                    label = f.readline().strip() or label
-            except OSError:
-                pass
-            sets.append({
-                "id": set_id,
-                "label": label,
-                "complete": bool(raw["ready"].get(set_id)),
-                "detail": raw.get("errors", {}).get(set_id),
-            })
-        st = os.statvfs("/")
+        st = statvfs(stat_path)
         root_total = st.f_blocks * st.f_frsize
         root_free = st.f_bavail * st.f_frsize
-        android_total = int(subprocess.check_output(
-            ["blockdev", "--getsize64", "/dev/sda34"], text=True).strip())
-        print(json.dumps({
-            "current": raw.get("current") if raw.get("current") in ("fedora", "android") else None,
-            "sets": sets,
-            "storage": {
-                "ubuntu": {"total": root_total, "used": root_total - root_free, "known": True},
-                "android": {"total": android_total, "used": 0, "known": False},
-            },
-        }))
+        storage["ubuntu"] = {
+            "total": root_total, "used": root_total - root_free, "known": True,
+        }
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        android_total = int(check_output(
+            ["blockdev", "--getsize64", android_device],
+            text=True, stderr=subprocess.DEVNULL).strip())
+        if android_total > 0:
+            storage["android"] = {"total": android_total, "used": 0, "known": False}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        # Storage display is supplemental. Missing/renumbered userdata must
+        # not make an otherwise valid boot-set status look unreadable.
+        pass
+    return storage
+
+
+def build_status(backend=BACKEND, base=BASE, runner=None, statvfs=None,
+                 check_output=None):
+    raw = _backend_status(backend, runner)
+    sets = []
+    for set_id in ("fedora", "android"):
+        if set_id not in raw.get("ready", {}):
+            continue
+        label = "Android" if set_id == "android" else "Fedora"
+        try:
+            with open(os.path.join(base, set_id, "name.txt"), encoding="utf-8") as f:
+                label = f.readline().strip() or label
+        except OSError:
+            pass
+        sets.append({
+            "id": set_id,
+            "label": label,
+            "complete": bool(raw["ready"].get(set_id)),
+            "detail": raw.get("errors", {}).get(set_id),
+        })
+    return {
+        "current": raw.get("current") if raw.get("current") in ("fedora", "android") else None,
+        "sets": sets,
+        "storage": _storage(statvfs=statvfs, check_output=check_output),
+    }
+
+
+def main():
+    try:
+        print(json.dumps(build_status()))
         return 0
     except Exception as e:
-        print(json.dumps({"current": None, "sets": [], "error": str(e)}))
+        # The GTK client reports stderr for a nonzero pkexec result. Keep the
+        # actual diagnosis there instead of burying it in ignored stdout JSON.
+        print(str(e), file=sys.stderr)
         return 1
 
 
