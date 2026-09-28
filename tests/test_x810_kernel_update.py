@@ -46,6 +46,9 @@ class MemoryResponse:
 
 
 class X810ReleaseTests(unittest.TestCase):
+    def test_backup_container_name_is_exported_for_the_update_page(self):
+        self.assertEqual(update.BACKUP_CONTAINER, "Tab Companion X810 Boot Backups")
+
     def setUp(self):
         self.old_partitions = update.PARTITIONS
         update.PARTITIONS = {name: 128 for name in self.old_partitions}
