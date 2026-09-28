@@ -1,0 +1,12 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Fixed polkit entry point for the narrow X810 kernel updater."""
+import os
+import sys
+
+BACKEND = "/usr/local/libexec/x810-kernel-update-core"
+
+if not os.path.isfile(BACKEND):
+    print("X810 kernel update backend is not installed", file=sys.stderr)
+    raise SystemExit(1)
+os.execv(BACKEND, [BACKEND, *sys.argv[1:]])

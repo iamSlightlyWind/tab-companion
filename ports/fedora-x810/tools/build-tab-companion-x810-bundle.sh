@@ -18,6 +18,10 @@ install -m 0755 tools/x810-boot-switch-core \
 for helper in tab-companion-boot-status tab-companion-boot-switch; do
     install -m 0755 "tools/$helper" "$stage/usr/local/libexec/$helper"
 done
+install -m 0755 tools/x810-kernel-update-core \
+    "$stage/usr/local/libexec/x810-kernel-update-core"
+install -m 0755 tools/tab-companion-kernel-update \
+    "$stage/usr/local/libexec/tab-companion-kernel-update"
 install -m 0755 usr/libexec/tab-companion-keyboard-recover \
     "$stage/usr/libexec/tab-companion-keyboard-recover"
 install -m 0644 packaging/io.github.agcarbajo.TabCompanion.X810.policy \

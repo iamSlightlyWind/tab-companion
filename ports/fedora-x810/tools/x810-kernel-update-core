@@ -1,0 +1,812 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Root-only SM-X810 boot-set snapshot and verified update writer."""
+
+import argparse
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+import pathlib
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import tarfile
+
+
+PARTITIONS = {
+    "boot": ("/dev/sda21", 100_663_296),
+    "init_boot": ("/dev/sda22", 8_388_608),
+    "vendor_boot": ("/dev/sda24", 100_663_296),
+    "dtbo": ("/dev/sda30", 16_777_216),
+}
+EXPECTED_MODEL = "SM-X810"
+EXPECTED_COMPATIBLE = "samsung,gts9pwifi"
+BACKUP_CONTAINER = "Tab Companion X810 Boot Backups"
+BACKUP_KIND = "tab-companion-x810-boot-backup"
+STAGING_ROOT = pathlib.Path("/var/cache/tab-companion/x810-kernel-update")
+MODULES_ROOT = pathlib.Path("/usr/lib/modules")
+ROOT_UID = 0
+BUILD_TAG = re.compile(r"^x810-fedora-port-build-([0-9]{1,20})$")
+HEX = re.compile(r"^[0-9a-f]{64}$")
+COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
+MAX_MANIFEST_BYTES = 2 * 1024 * 1024
+MAX_MODULE_ARCHIVE_BYTES = 1024 * 1024 * 1024
+MAX_MODULE_ARCHIVE_MEMBERS = 250_000
+MAX_MODULE_TREE_BYTES = 2 * 1024 * 1024 * 1024
+IMAGES = {name + ".img": size for name, (_dev, size) in PARTITIONS.items()}
+REQUIRED_ASSETS = {**IMAGES, "kernel.rpm": None}
+
+
+def emit(kind, message):
+    print(json.dumps({"kind": kind, "message": message}), flush=True)
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb", buffering=0) as stream:
+        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def sha256_stream(stream, size=None):
+    digest = hashlib.sha256()
+    remaining = size
+    while remaining is None or remaining > 0:
+        amount = 4 * 1024 * 1024 if remaining is None else min(4 * 1024 * 1024, remaining)
+        block = stream.read(amount)
+        if not block:
+            break
+        digest.update(block)
+        if remaining is not None:
+            remaining -= len(block)
+    return digest.hexdigest()
+
+
+def check_real_directory(path, label):
+    path = pathlib.Path(path)
+    if not path.is_absolute():
+        raise ValueError(f"{label} must be an absolute path")
+    current = pathlib.Path("/")
+    for component in path.parts[1:]:
+        current = current / component
+        try:
+            info = current.lstat()
+        except OSError as error:
+            raise ValueError(f"{label} does not exist: {current}") from error
+        if pathlib.Path(current).is_symlink():
+            raise ValueError(f"{label} path contains a symbolic link: {current}")
+        if current != path and not current.is_dir():
+            raise ValueError(f"{label} path component is not a directory: {current}")
+    if not path.is_dir():
+        raise ValueError(f"{label} is not a directory")
+    if path == pathlib.Path("/"):
+        raise ValueError(f"{label} cannot be the filesystem root")
+    return path
+
+
+def _requesting_uid():
+    try:
+        uid = int(os.environ["PKEXEC_UID"])
+        if uid < 0:
+            raise ValueError
+        return uid
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("Cannot determine which desktop user requested this update") from error
+
+
+def _safe_candidate(directory, uid):
+    root = check_real_directory(directory, "verified release cache")
+    info = root.lstat()
+    if info.st_uid != uid or info.st_mode & 0o022:
+        raise ValueError("Release cache must be owned by the requesting user and not group/world-writable")
+    manifest_path = root / "manifest.json"
+    manifest_info = manifest_path.lstat()
+    if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_info.st_uid != uid:
+        raise ValueError("Release manifest is not a safe user-owned regular file")
+    if not 1 <= manifest_info.st_size <= MAX_MANIFEST_BYTES:
+        raise ValueError("Release manifest has an invalid size")
+    with manifest_path.open("r", encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    if (manifest.get("schema_version") != 1
+            or manifest.get("type") != "x810-fedora-release"
+            or manifest.get("device") != {"model": EXPECTED_MODEL, "codename": "gts9pwifi"}):
+        raise ValueError("Release manifest is not for SM-X810 / gts9pwifi")
+    tag = manifest.get("release_tag")
+    tag_match = BUILD_TAG.fullmatch(tag) if isinstance(tag, str) else None
+    if tag_match is None:
+        raise ValueError("Release manifest tag is not a valid X810 build tag")
+    if not COMMIT.fullmatch(str(manifest.get("source_commit", ""))):
+        raise ValueError("Release manifest has an invalid source commit")
+    build_number = tag_match.group(1)
+    records = manifest.get("assets")
+    if not isinstance(records, list) or len(records) > 64:
+        raise ValueError("Release manifest has an invalid assets list")
+    by_name = {}
+    for item in records:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            raise ValueError("Release manifest has an invalid asset entry")
+        if item["name"] in by_name:
+            raise ValueError(f"Release manifest has duplicate asset {item['name']}")
+        by_name[item["name"]] = item
+    if not set(REQUIRED_ASSETS).issubset(by_name):
+        raise ValueError("Release manifest is missing one or more X810 kernel assets")
+    for name, partition_size in REQUIRED_ASSETS.items():
+        item = by_name[name]
+        size, digest = item.get("size_bytes"), item.get("sha256")
+        if (isinstance(size, bool) or not isinstance(size, int) or size <= 0
+                or (partition_size is not None and size != partition_size)
+                or not isinstance(digest, str) or not HEX.fullmatch(digest)):
+            raise ValueError(f"Release manifest contains invalid size/hash metadata for {name}")
+        if name == "kernel.rpm" and size > 1024 * 1024 * 1024:
+            raise ValueError("Kernel RPM exceeds the maximum permitted size")
+        asset_path = root / name
+        asset_info = asset_path.lstat()
+        if (not asset_path.is_file() or asset_path.is_symlink() or asset_info.st_uid != uid
+                or asset_info.st_size != size or sha256_file(asset_path) != digest):
+            raise ValueError(f"{name} failed independent size/SHA-256 verification")
+    return manifest, build_number, by_name
+
+
+def validate_tablet():
+    compat_path = pathlib.Path("/proc/device-tree/compatible")
+    try:
+        compatible = compat_path.read_bytes().rstrip(b"\0").decode("ascii", "replace").split("\0")
+    except OSError as error:
+        raise ValueError("Cannot read the live device-tree identity") from error
+    if EXPECTED_COMPATIBLE not in compatible:
+        raise ValueError("Live device tree is not samsung,gts9pwifi (SM-X810)")
+    try:
+        os_release = pathlib.Path("/etc/os-release").read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError("Cannot verify the running Fedora installation") from error
+    if not re.search(r"(?m)^ID=(?:\"fedora\"|'fedora'|fedora)$", os_release):
+        raise ValueError("X810 kernel update is permitted only from Fedora")
+    root_source = subprocess.check_output(
+        ["findmnt", "-n", "-o", "SOURCE", "/"], text=True, timeout=10
+    ).strip()
+    if os.path.realpath(root_source) != "/dev/sda35":
+        raise ValueError(f"Running root is {root_source}, not the expected Fedora linuxroot /dev/sda35")
+    _validate_partlabel("linuxroot", "/dev/sda35")
+    for name, (device, expected_size) in PARTITIONS.items():
+        if not os.path.exists(device):
+            raise ValueError(f"Missing required X810 partition {name}: {device}")
+        actual_size = int(subprocess.check_output(
+            ["blockdev", "--getsize64", device], text=True, timeout=10
+        ).strip())
+        if actual_size != expected_size:
+            raise ValueError(f"{name} partition has {actual_size} bytes; expected {expected_size}")
+        if not pathlib.Path(device).is_block_device():
+            raise ValueError(f"Refusing non-block target for {name}: {device}")
+        _validate_partlabel(name, device)
+
+
+def _validate_partlabel(label, expected_device):
+    link = pathlib.Path("/dev/disk/by-partlabel") / label
+    if not link.exists() or not link.is_block_device():
+        raise ValueError(f"Missing block-device identity link for GPT partition {label}")
+    if os.path.realpath(link) != os.path.realpath(expected_device):
+        raise ValueError(
+            f"GPT label {label} resolves to {os.path.realpath(link)}, not the expected {expected_device}"
+        )
+
+
+def _verify_x810_rpm(path):
+    if not shutil.which("rpm"):
+        raise ValueError("rpm query tool is not installed")
+    fields = subprocess.check_output(
+        ["rpm", "-qp", "--queryformat", "%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}", str(path)],
+        text=True, timeout=30,
+    ).splitlines()
+    if len(fields) != 3 or fields[0] != "linux-x810" or fields[2] != "aarch64":
+        raise ValueError("Release RPM is not the expected aarch64 linux-x810 package")
+    emit("step", f"Verified RPM metadata: linux-x810 {fields[1]} ({fields[2]})")
+
+
+def _install_x810_rpm(path):
+    manager = shutil.which("dnf5") or shutil.which("dnf")
+    if not manager:
+        raise ValueError("Neither dnf5 nor dnf is installed")
+    emit("step", "Reinstalling the verified local linux-x810 RPM…")
+    result = subprocess.run(
+        [manager, "reinstall", "--assumeyes", "--setopt=clean_requirements_on_remove=False", str(path)],
+        check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        timeout=900, env={**os.environ, "LC_ALL": "C"},
+    )
+    if result.returncode:
+        details = (result.stdout or "").strip().splitlines()
+        raise RuntimeError("DNF kernel RPM reinstall failed:\n" + "\n".join(details[-20:]))
+    emit("step", "linux-x810 RPM reinstalled successfully")
+
+
+def _create_backup(root, manifest, build_number, uid):
+    container = root / BACKUP_CONTAINER
+    container.mkdir(mode=0o755, exist_ok=True)
+    if container.is_symlink() or not container.is_dir():
+        raise ValueError("Backup container is not a normal directory")
+    build_dir = container / build_number
+    files_dir = build_dir / "files"
+    if build_dir.exists():
+        if build_dir.is_symlink() or not build_dir.is_dir():
+            raise ValueError(f"Backup destination already exists and is unsafe: {build_dir}")
+        metadata = build_dir / "backup.json"
+        if metadata.is_file() and not metadata.is_symlink():
+            record = json.loads(metadata.read_text(encoding="utf-8"))
+            if (record.get("kind") == BACKUP_KIND
+                    and record.get("target_release_tag") == manifest["release_tag"]):
+                saved_hashes = record.get("files", {})
+                current_hashes = _partition_hashes()
+                if (set(saved_hashes) == {name + ".img" for name in PARTITIONS}
+                        and all(current_hashes[name.removesuffix(".img")] == value.get("sha256")
+                                for name, value in saved_hashes.items())):
+                    _verify_backup_files(build_dir, record)
+                    emit("step", f"Reusing the verified pre-update snapshot {build_dir}")
+                    return build_dir
+        raise ValueError(f"Refusing to overwrite an existing backup: {build_dir}; choose another folder")
+
+    module_release = os.uname().release
+    if not re.fullmatch(r"[A-Za-z0-9._+-]{1,120}", module_release):
+        raise ValueError("Running kernel release has an unsafe module path")
+    module_dir = MODULES_ROOT / module_release
+    if module_dir.is_symlink() or not module_dir.is_dir():
+        raise ValueError(f"Matching kernel modules are not present at {module_dir}")
+    module_bytes = 0
+    module_entries = 0
+    for path in module_dir.rglob("*"):
+        if path.is_symlink():
+            # Do not follow user-added links; they are not runtime module files.
+            continue
+        module_entries += 1
+        if path.is_file():
+            module_bytes += path.stat().st_size
+    if module_bytes > MAX_MODULE_TREE_BYTES:
+        raise ValueError("Running kernel module tree exceeds the safe snapshot size limit")
+    needed = (sum(size for _device, size in PARTITIONS.values()) + module_bytes
+              + module_entries * 1024 + 32 * 1024 * 1024)
+    free = shutil.disk_usage(root).free
+    if free < needed:
+        raise ValueError(f"Backup target has {free} bytes free; at least {needed} are needed")
+    temp = pathlib.Path(tempfile.mkdtemp(prefix=f".{build_number}.pending-", dir=container))
+    files_dir = temp / "files"
+    files_dir.mkdir(mode=0o755)
+    hashes = {}
+    try:
+        for name, (device, size) in PARTITIONS.items():
+            image_name = name + ".img"
+            destination = files_dir / image_name
+            emit("step", f"Saving current {name} to the selected fallback folder…")
+            digest = hashlib.sha256()
+            total = 0
+            out_fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with open(device, "rb", buffering=0) as source, os.fdopen(out_fd, "wb") as output:
+                while total < size:
+                    block = source.read(min(4 * 1024 * 1024, size - total))
+                    if not block:
+                        raise ValueError(f"Short read while snapshotting {name}")
+                    output.write(block)
+                    digest.update(block)
+                    total += len(block)
+                output.flush()
+                os.fsync(output.fileno())
+            if destination.stat().st_size != size or sha256_file(destination) != digest.hexdigest():
+                raise ValueError(f"Snapshot verification failed for {name}")
+            hashes[image_name] = {"size_bytes": size, "sha256": digest.hexdigest()}
+            _make_user_readable(destination, uid)
+        module_archive_name = f"modules-{module_release}.tar.gz"
+        module_archive = files_dir / module_archive_name
+        emit("step", "Saving the matching running kernel-module tree for rollback…")
+        with tarfile.open(module_archive, "w:gz", compresslevel=1, format=tarfile.GNU_FORMAT) as archive:
+            for source in sorted(module_dir.rglob("*")):
+                if source.is_symlink():
+                    continue
+                archive.add(source, arcname=str(source.relative_to(MODULES_ROOT)), recursive=False)
+        _verify_module_archive(module_archive, module_release)
+        if module_archive.stat().st_size > MAX_MODULE_ARCHIVE_BYTES:
+            raise ValueError("Saved kernel-module archive exceeds the safe snapshot size limit")
+        module_backup = {"archive": module_archive_name,
+                         "release": module_release,
+                         "size_bytes": module_archive.stat().st_size,
+                         "sha256": sha256_file(module_archive)}
+        _make_user_readable(module_archive, uid)
+        restore_script = temp / "restore-modules-in-twrp.sh"
+        restore_script.write_text(_twrp_restore_script(module_backup), encoding="utf-8")
+        restore_script_hash = sha256_file(restore_script)
+        record = {
+            "schema_version": 1,
+            "kind": BACKUP_KIND,
+            "device": EXPECTED_MODEL,
+            "created_unix": int(time.time()),
+            "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source_kernel_release": os.uname().release,
+            "target_release_tag": manifest["release_tag"],
+            "release_source_commit": manifest["source_commit"],
+            "files": hashes,
+            "module_backup": module_backup,
+            "restore_script_sha256": restore_script_hash,
+        }
+        metadata = temp / "backup.json"
+        metadata.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        with metadata.open("rb") as stream:
+            os.fsync(stream.fileno())
+        readme = temp / "READ-ME-TWRP.txt"
+        readme.write_text(
+            "X810 boot-image fallback snapshot\n"
+            "==================================\n\n"
+            "This folder contains the four SM-X810 boot images captured immediately before a Tab Companion kernel update.\n"
+            "The images are in files/ and are named for their exact target partitions.\n\n"
+            "IMPORTANT: TWRP may not be able to read Fedora's internal linuxroot filesystem. Before relying on this as\n"
+            "a recovery copy, copy the entire numbered folder to a microSD card or USB-OTG drive that TWRP can mount.\n"
+            "Do not store the only copy on the tablet's Linux filesystem. Keep the folder together with backup.json.\n\n"
+            "Manual restore in TWRP: choose Install > Install Image, select each files/*.img in turn, and flash it to\n"
+            "the matching partition: boot.img -> Boot; init_boot.img -> init_boot; vendor_boot.img -> vendor_boot;\n"
+            "dtbo.img -> dtbo. Do not flash these as a ZIP. Do not select vbmeta, recovery, firmware, userdata, or GPT.\n"
+            "The files/ folder also contains the matching pre-update kernel-module archive. After restoring all four\n"
+            "images, if Linux fails to start or the drivers do not match, open TWRP Terminal (or an ADB shell) and run:\n"
+            "  sh /path/to/this/numbered-folder/restore-modules-in-twrp.sh\n"
+            "The script checks the archive checksum, mounts the existing Fedora linuxroot read-write (it does not\n"
+            "format it), verifies Fedora, and replaces only /usr/lib/modules/<saved-kernel-release>. It does not reboot.\n"
+            "Keep the complete numbered folder together. Reboot only after all restore steps finish.\n",
+            encoding="utf-8",
+        )
+        _make_user_readable(metadata, uid)
+        _make_user_readable(readme, uid)
+        _make_user_readable(restore_script, uid)
+        _make_user_readable(files_dir, uid, directory=True)
+        _make_user_readable(temp, uid, directory=True)
+        _fsync_directory(files_dir)
+        _fsync_directory(temp)
+        os.rename(temp, build_dir)
+        _fsync_directory(container)
+        emit("step", f"Verified fallback snapshot saved at {build_dir}")
+        return build_dir
+    except Exception:
+        shutil.rmtree(temp, ignore_errors=True)
+        raise
+
+
+def _make_user_readable(path, uid, directory=False):
+    try:
+        os.chown(path, uid, pwd.getpwuid(uid).pw_gid)
+    except (OSError, KeyError):
+        # FAT/exFAT mount ownership is set at mount time and cannot be chowned.
+        pass
+    try:
+        os.chmod(path, 0o755 if directory else 0o644)
+    except OSError:
+        pass
+
+
+def _fsync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _partition_hashes():
+    result = {}
+    for name, (device, size) in PARTITIONS.items():
+        with open(device, "rb", buffering=0) as stream:
+            result[name] = sha256_stream(stream, size)
+    return result
+
+
+def _verify_backup_files(build_dir, record):
+    files = record.get("files")
+    if not isinstance(files, dict) or set(files) != {name + ".img" for name in PARTITIONS}:
+        raise ValueError("Existing fallback snapshot has an invalid partition list")
+    files_dir = build_dir / "files"
+    if files_dir.is_symlink() or not files_dir.is_dir():
+        raise ValueError("Existing fallback snapshot has an unsafe files directory")
+    for image_name, size in IMAGES.items():
+        item = files.get(image_name)
+        path = build_dir / "files" / image_name
+        if (not isinstance(item, dict) or item.get("size_bytes") != size
+                or not HEX.fullmatch(str(item.get("sha256", "")))
+                or path.is_symlink() or not path.is_file() or path.stat().st_size != size
+                or sha256_file(path) != item["sha256"]):
+            raise ValueError(f"Existing fallback snapshot is damaged: {image_name}")
+    module = record.get("module_backup")
+    if not isinstance(module, dict):
+        raise ValueError("Fallback snapshot has no matching kernel-module archive")
+    release, archive_name = module.get("release"), module.get("archive")
+    if (not isinstance(release, str) or not re.fullmatch(r"[A-Za-z0-9._+-]{1,120}", release)
+            or archive_name != f"modules-{release}.tar.gz"):
+        raise ValueError("Fallback snapshot has invalid kernel-module metadata")
+    archive_path = files_dir / archive_name
+    if (archive_path.is_symlink() or not archive_path.is_file()
+            or archive_path.stat().st_size > MAX_MODULE_ARCHIVE_BYTES
+            or archive_path.stat().st_size != module.get("size_bytes")
+            or not HEX.fullmatch(str(module.get("sha256", "")))
+            or sha256_file(archive_path) != module["sha256"]):
+        raise ValueError("Fallback snapshot kernel-module archive is damaged")
+    _verify_module_archive(archive_path, release)
+    restore_script = build_dir / "restore-modules-in-twrp.sh"
+    expected_script_hash = record.get("restore_script_sha256")
+    if (restore_script.is_symlink() or not restore_script.is_file()
+            or not HEX.fullmatch(str(expected_script_hash or ""))
+            or sha256_file(restore_script) != expected_script_hash):
+        raise ValueError("Fallback snapshot TWRP module-restore script is missing or damaged")
+
+
+def _verify_module_archive(path, release):
+    try:
+        with tarfile.open(path, "r:gz") as archive:
+            count = 0
+            total_size = 0
+            for member in archive:
+                count += 1
+                total_size += member.size
+                if count > MAX_MODULE_ARCHIVE_MEMBERS or total_size > MAX_MODULE_TREE_BYTES:
+                    raise ValueError("Kernel-module archive exceeds safe member/expanded-size limits")
+                name = pathlib.PurePosixPath(member.name)
+                if (name.is_absolute() or ".." in name.parts or not name.parts
+                        or name.parts[0] != release or member.issym() or member.islnk()
+                        or not (member.isdir() or member.isfile())):
+                    raise ValueError("Kernel-module archive contains an unsafe member")
+            if count == 0:
+                raise ValueError("Kernel-module archive is empty")
+    except (OSError, tarfile.TarError) as error:
+        raise ValueError(f"Kernel-module archive is invalid: {error}") from error
+
+
+def _twrp_restore_script(module_backup):
+    release = module_backup["release"]
+    archive_name = module_backup["archive"]
+    digest = module_backup["sha256"]
+    if not re.fullmatch(r"[A-Za-z0-9._+-]{1,120}", release):
+        raise ValueError("Unsafe kernel release for TWRP restore script")
+    if archive_name != f"modules-{release}.tar.gz" or not HEX.fullmatch(digest):
+        raise ValueError("Invalid kernel-module archive metadata")
+    return f'''#!/bin/sh
+# Generated by Tab Companion. Run from TWRP Terminal or an ADB shell as root.
+set -eu
+RELEASE='{release}'
+ARCHIVE='files/{archive_name}'
+EXPECTED_SHA256='{digest}'
+MOUNT='/tmp/x810-fallback-linuxroot'
+BASE=$(dirname "$0")
+ARCHIVE_PATH="$BASE/$ARCHIVE"
+
+fail() {{ echo "ERROR: $*" >&2; exit 1; }}
+[ "$(id -u)" = 0 ] || fail "Run this script as root in TWRP."
+[ -f "$ARCHIVE_PATH" ] || fail "Missing module archive: $ARCHIVE_PATH"
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL=$(sha256sum "$ARCHIVE_PATH" | cut -d ' ' -f 1)
+elif command -v busybox >/dev/null 2>&1; then
+    ACTUAL=$(busybox sha256sum "$ARCHIVE_PATH" | cut -d ' ' -f 1)
+else
+    fail "sha256sum (or BusyBox with sha256sum) is required in recovery."
+fi
+[ "$ACTUAL" = "$EXPECTED_SHA256" ] || fail "Module archive checksum mismatch."
+if grep -Fq " $MOUNT " /proc/mounts; then
+    fail "$MOUNT is already mounted; unmount it manually and retry."
+fi
+[ ! -e "$MOUNT" ] || fail "$MOUNT already exists; inspect/remove it before retrying."
+mkdir "$MOUNT"
+STAGE=''
+MOUNTED=0
+cleanup() {{
+    status=$?
+    trap - 0 1 2 3 15
+    set +e
+    [ -z "$STAGE" ] || {{ [ ! -d "$STAGE" ] || rm -rf "$STAGE" || status=1; }}
+    if [ "$MOUNTED" = 1 ]; then sync; umount "$MOUNT" || status=1; fi
+    rmdir "$MOUNT" 2>/dev/null || true
+    exit "$status"
+}}
+trap cleanup 0 1 2 3 15
+mount -t ext4 -o rw /dev/block/sda35 "$MOUNT" || fail "Could not mount linuxroot; no formatting is attempted."
+MOUNTED=1
+[ -f "$MOUNT/etc/os-release" ] || fail "Mounted partition has no /etc/os-release; refusing to modify it."
+grep -qx 'ID=fedora' "$MOUNT/etc/os-release" || fail "Mounted partition is not Fedora."
+MODULES="$MOUNT/usr/lib/modules"
+[ -d "$MODULES" ] || fail "Fedora /usr/lib/modules is missing."
+DEST="$MODULES/$RELEASE"
+[ ! -L "$DEST" ] || fail "Target module directory is a symlink."
+STAGE="$MODULES/.tab-companion-restore-$RELEASE-$$"
+OLD="$MODULES/.$RELEASE.tab-companion-old-$$"
+[ ! -e "$STAGE" ] && [ ! -e "$OLD" ] || fail "Temporary recovery path already exists."
+mkdir "$STAGE"
+tar -xzf "$ARCHIVE_PATH" -C "$STAGE" || fail "Could not extract the saved module archive."
+[ -d "$STAGE/$RELEASE" ] || fail "Archive does not contain the expected kernel release."
+[ -f "$STAGE/$RELEASE/modules.dep" ] || fail "Saved kernel module metadata is missing."
+if [ -e "$DEST" ]; then mv "$DEST" "$OLD" || fail "Could not preserve the current module tree."; fi
+if ! mv "$STAGE/$RELEASE" "$DEST"; then
+    [ ! -e "$OLD" ] || mv "$OLD" "$DEST" || fail "Restore failed and the previous module tree could not be put back."
+    fail "Could not install the saved module tree."
+fi
+if [ ! -f "$DEST/modules.dep" ]; then
+    rm -rf "$DEST"
+    [ ! -e "$OLD" ] || mv "$OLD" "$DEST" || fail "Verification failed and previous modules could not be restored."
+    fail "Restored module metadata failed verification."
+fi
+[ ! -e "$OLD" ] || rm -rf "$OLD"
+sync
+echo "Restored /usr/lib/modules/$RELEASE. No reboot was performed."
+'''
+
+
+def _restore_modules(backup_dir, record):
+    module = record["module_backup"]
+    release = module["release"]
+    archive_path = backup_dir / "files" / module["archive"]
+    _verify_module_archive(archive_path, release)
+    module_dir = MODULES_ROOT / release
+    if module_dir.is_symlink() or (module_dir.exists() and not module_dir.is_dir()):
+        raise ValueError("Refusing to replace an unsafe kernel-module directory")
+    staging = pathlib.Path(tempfile.mkdtemp(prefix=f".restore-{release}-", dir=MODULES_ROOT))
+    extracted = staging / release
+    try:
+        with tarfile.open(archive_path, "r:gz") as archive:
+            for member in archive.getmembers():
+                target = staging.joinpath(*pathlib.PurePosixPath(member.name).parts)
+                if member.isdir():
+                    target.mkdir(mode=0o755, parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+                    source = archive.extractfile(member)
+                    if source is None:
+                        raise ValueError("Cannot read saved kernel-module file")
+                    with source, target.open("xb") as output:
+                        shutil.copyfileobj(source, output, length=4 * 1024 * 1024)
+                    os.chmod(target, member.mode & 0o755 or 0o644)
+        if not extracted.is_dir():
+            raise ValueError("Kernel-module backup did not contain the expected release directory")
+        old = MODULES_ROOT / f".{release}.pre-update"
+        if old.exists() or old.is_symlink():
+            raise ValueError("A previous module-restore recovery directory exists; inspect it before retrying")
+        if module_dir.exists():
+            os.rename(module_dir, old)
+        try:
+            os.rename(extracted, module_dir)
+        except Exception:
+            if old.exists() and not module_dir.exists():
+                os.rename(old, module_dir)
+            raise
+        if old.exists():
+            shutil.rmtree(old)
+        os.sync()
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    emit("step", f"Restored the saved /usr/lib/modules/{release} tree")
+
+
+def _partition_path_safe(name):
+    device, expected_size = PARTITIONS[name]
+    _validate_partlabel(name, device)
+    if not pathlib.Path(device).is_block_device():
+        raise ValueError(f"Refusing non-block target for {name}: {device}")
+    actual_size = int(subprocess.check_output(["blockdev", "--getsize64", device], text=True).strip())
+    if actual_size != expected_size:
+        raise ValueError(f"Partition geometry changed for {name}")
+    return device, expected_size
+
+
+def _write_image(name, source_path, expected_hash):
+    device, size = _partition_path_safe(name)
+    if source_path.stat().st_size != size or sha256_file(source_path) != expected_hash:
+        raise ValueError(f"Refusing unverified image for {name}")
+    emit("step", f"Writing {name}…")
+    target_fd = os.open(device, os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    with open(source_path, "rb", buffering=0) as source, os.fdopen(target_fd, "wb", buffering=0) as target:
+        copied = 0
+        while True:
+            block = source.read(4 * 1024 * 1024)
+            if not block:
+                break
+            target.write(block)
+            copied += len(block)
+        if copied != size:
+            raise ValueError(f"Short input while writing {name}")
+        target.flush()
+        os.fsync(target.fileno())
+    os.sync()
+    with open(device, "rb", buffering=0) as target:
+        actual = sha256_stream(target, size)
+    if actual != expected_hash:
+        raise ValueError(f"Read-back verification failed for {name}")
+    emit("step", f"{name}: written and read-back verified")
+
+
+def _prune_backups(container, keep=5):
+    snapshots = []
+    for entry in container.iterdir():
+        if not entry.name.isdigit() or entry.is_symlink() or not entry.is_dir():
+            continue
+        metadata = entry / "backup.json"
+        try:
+            if metadata.is_symlink() or not metadata.is_file():
+                continue
+            record = json.loads(metadata.read_text(encoding="utf-8"))
+            if record.get("kind") != BACKUP_KIND or record.get("device") != EXPECTED_MODEL:
+                continue
+            _verify_backup_files(entry, record)
+            snapshots.append((int(record.get("created_unix", 0)), int(entry.name), entry))
+        except Exception:
+            continue
+    snapshots.sort(reverse=True)
+    for _created, _build, entry in snapshots[keep:]:
+        shutil.rmtree(entry)
+        emit("step", f"Removed older Tab Companion snapshot {entry.name}; retaining the latest {keep} verified snapshots")
+
+
+def apply(release_dir, backup_root, backup_device):
+    uid = _requesting_uid()
+    validate_tablet()
+    release_root = pathlib.Path(release_dir)
+    manifest, build_number, assets = _safe_candidate(release_root, uid)
+    _verify_x810_rpm(release_root / "kernel.rpm")
+    selected = check_real_directory(backup_root, "selected fallback folder")
+    selected_info = selected.stat()
+    if selected_info.st_dev != backup_device:
+        raise ValueError("The selected backup drive is no longer mounted at this folder; choose it again.")
+    if selected_info.st_uid not in (uid, 0) or selected_info.st_mode & 0o022:
+        raise ValueError("Selected fallback folder must be user-owned and not group/world-writable")
+    with _update_lock():
+        backup_dir = _create_backup(selected, manifest, build_number, uid)
+        _apply_locked(release_root, selected, manifest, build_number, assets, backup_dir, backup_device)
+        return backup_dir
+
+
+def _apply_locked(release_root, selected, manifest, build_number, assets, backup_dir, backup_device):
+    container = selected / BACKUP_CONTAINER
+    if container.is_symlink() or not container.is_dir():
+        raise ValueError("Fallback backup container is missing or unsafe")
+    if backup_dir != container / build_number:
+        raise ValueError("Fallback snapshot path does not match this release build ID")
+    record_path = backup_dir / "backup.json"
+    if (backup_dir.is_symlink() or not backup_dir.is_dir()
+            or record_path.is_symlink() or not record_path.is_file()):
+        raise ValueError("No verified pre-update fallback snapshot exists; refusing to flash")
+    backup_record = json.loads(record_path.read_text(encoding="utf-8"))
+    if (backup_record.get("kind") != BACKUP_KIND or backup_record.get("target_release_tag") != manifest["release_tag"]
+            or backup_record.get("device") != EXPECTED_MODEL):
+        raise ValueError("Fallback snapshot does not match this X810 update")
+        _verify_backup_files(backup_dir, backup_record)
+    live = _partition_hashes()
+    saved = {name.removesuffix(".img"): info["sha256"]
+             for name, info in backup_record["files"].items()}
+    if live != saved:
+        raise ValueError("Live boot partitions changed after backup; refusing to flash. Save a fresh snapshot first.")
+
+    # Prepare every new image in a root-only directory and hash it a second time
+    # before the first raw partition write. This closes the UI/cache TOCTOU gap.
+    staging_root = STAGING_ROOT
+    staging_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = staging_root.lstat()
+    if (not staging_root.is_dir() or staging_root.is_symlink()
+            or st.st_uid != ROOT_UID or st.st_mode & 0o022):
+        raise ValueError("Unsafe root-owned kernel-update staging directory")
+    required_stage_bytes = 2 * sum(PARTITIONS[name][1] for name in PARTITIONS) + assets["kernel.rpm"]["size_bytes"] + 32 * 1024 * 1024
+    if shutil.disk_usage(staging_root).free < required_stage_bytes:
+        raise ValueError("Not enough free space in the protected staging area for verified update and rollback copies")
+    staged = pathlib.Path(tempfile.mkdtemp(prefix="apply-", dir=staging_root))
+    try:
+        for name in IMAGES:
+            src = release_root / name
+            dst = staged / name
+            with src.open("rb", buffering=0) as input_file, dst.open("xb", buffering=0) as output_file:
+                shutil.copyfileobj(input_file, output_file, length=4 * 1024 * 1024)
+                output_file.flush()
+                os.fsync(output_file.fileno())
+            if dst.stat().st_size != assets[name]["size_bytes"] or sha256_file(dst) != assets[name]["sha256"]:
+                raise ValueError(f"{name} changed during privileged staging")
+        for image_name in IMAGES:
+            src = backup_dir / "files" / image_name
+            dst = staged / ("old-" + image_name)
+            expected = backup_record["files"][image_name]["sha256"]
+            with src.open("rb", buffering=0) as input_file, dst.open("xb", buffering=0) as output_file:
+                shutil.copyfileobj(input_file, output_file, length=4 * 1024 * 1024)
+                output_file.flush()
+                os.fsync(output_file.fileno())
+            if dst.stat().st_size != IMAGES[image_name] or sha256_file(dst) != expected:
+                raise ValueError(f"Saved fallback {image_name} changed during privileged staging")
+
+        rpm_src = release_root / "kernel.rpm"
+        rpm_dst = staged / "kernel.rpm"
+        with rpm_src.open("rb", buffering=0) as input_file, rpm_dst.open("xb", buffering=0) as output_file:
+            shutil.copyfileobj(input_file, output_file, length=4 * 1024 * 1024)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        rpm_record = assets["kernel.rpm"]
+        if rpm_dst.stat().st_size != rpm_record["size_bytes"] or sha256_file(rpm_dst) != rpm_record["sha256"]:
+            raise ValueError("kernel.rpm changed during privileged staging")
+        _verify_x810_rpm(rpm_dst)
+
+        write_started = False
+        try:
+            if selected.stat().st_dev != backup_device:
+                raise ValueError("Fallback drive was disconnected before applying the kernel RPM")
+            _install_x810_rpm(rpm_dst)
+            for image_name in IMAGES:
+                part = image_name[:-4]
+                if selected.stat().st_dev != backup_device:
+                    raise ValueError("Fallback drive disconnected during update; stopping and restoring")
+                write_started = True
+                _write_image(part, staged / image_name, assets[image_name]["sha256"])
+        except Exception as update_error:
+            if write_started:
+                emit("error", f"Update write failed ({update_error}); restoring the saved boot set…")
+            rollback_errors = []
+            if write_started:
+                for part, (_device, _size) in PARTITIONS.items():
+                    image_name = part + ".img"
+                    try:
+                        expected = backup_record["files"][image_name]["sha256"]
+                        _write_image(part, staged / ("old-" + image_name), expected)
+                    except Exception as rollback_error:
+                        rollback_errors.append(f"{part}: {rollback_error}")
+            try:
+                _restore_modules(backup_dir, backup_record)
+            except Exception as rollback_error:
+                rollback_errors.append(f"kernel modules: {rollback_error}")
+            if rollback_errors:
+                raise RuntimeError(
+                    "Update failed and automatic restoration was not fully verified: "
+                    + "; ".join(rollback_errors)
+                    + ". Do NOT reboot. Use the saved files from TWRP."
+                ) from update_error
+            raise RuntimeError(
+                f"Update failed; kernel modules were restored"
+                f"{'; all four saved images were restored and verified' if write_started else ''}: "
+                f"{update_error}. Do NOT reboot yet."
+            ) from update_error
+        try:
+            _prune_backups(container, keep=5)
+        except Exception as prune_error:
+            emit("warning", f"Update succeeded, but old-backup cleanup was skipped: {prune_error}")
+        emit("done", f"X810 boot set updated and verified. Fallback saved at {backup_dir}; tablet was NOT rebooted.")
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
+
+
+class _UpdateLock:
+    def __enter__(self):
+        path = "/run/lock/tab-companion-x810-kernel-update.lock"
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            os.close(fd)
+            raise ValueError("Unsafe X810 kernel-update lock file")
+        self.file = os.fdopen(fd, "a", encoding="ascii")
+        fcntl.flock(self.file, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *_args):
+        fcntl.flock(self.file, fcntl.LOCK_UN)
+        self.file.close()
+
+
+def _update_lock():
+    return _UpdateLock()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    command = sub.add_parser("apply")
+    command.add_argument("--release-dir", required=True)
+    command.add_argument("--backup-root", required=True)
+    command.add_argument("--backup-device", required=True, type=int)
+    args = parser.parse_args(argv)
+    if os.geteuid() != 0:
+        emit("error", "This operation must run through polkit")
+        return 1
+    try:
+        apply(args.release_dir, args.backup_root, args.backup_device)
+    except Exception as error:
+        emit("error", str(error))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

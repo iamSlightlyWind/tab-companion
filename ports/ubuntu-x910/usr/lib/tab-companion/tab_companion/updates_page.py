@@ -91,6 +91,11 @@ class UpdatesPage(Adw.PreferencesPage):
             port_id = self.record.get("port_id") or ""
             port_repo = self.record.get("repo_url") or ""
             port_version = installed_port_version(self.record)
+            has_x810_kernel_updater = (
+                self.manager == "rpm"
+                and self.target.get("device") == "SM-X810"
+                and port_id == "x810-fedora"
+            )
             self._build_source(
                 key="port",
                 title=self.record.get("name", _("Linux port")),
@@ -105,8 +110,15 @@ class UpdatesPage(Adw.PreferencesPage):
                 ),
                 build_info_path=self.record.get("build_info_path", "/usr/share/tab-companion/port-build.json"),
                 version=port_version,
-                description=_("Update the Linux port packages. Kernel and boot images remain manual TWRP updates."),
+                description=(
+                    _("Update the Fedora port support package. Kernel and boot-image updates use the guarded X810 updater below.")
+                    if has_x810_kernel_updater
+                    else _("Update the Linux port packages. Kernel and boot images remain manual TWRP updates.")
+                ),
             )
+            if has_x810_kernel_updater:
+                from .x810_kernel_update_page import X810KernelUpdateSection
+                self.add(X810KernelUpdateSection(self.target))
         if not self.manager:
             self._set_status("app", _("No supported package manager was detected."))
             self._set_status("port", _("No supported package manager was detected."))

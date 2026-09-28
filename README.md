@@ -45,6 +45,22 @@ provenance checks. If a component has no relevant source change, its last
 successful public package remains the current one; old outputs are not
 re-stamped as a new build.
 
+On Fedora SM-X810, **Updates** also includes **Kernel and boot images**. Choose
+a writable fallback directory before installing. Prefer a microSD or USB-OTG
+drive; Tab Companion saves the current `boot`, `init_boot`, `vendor_boot`,
+`dtbo` images and matching kernel modules under
+`<chosen-folder>/Tab Companion X810 Boot Backups/<build-id>/files/`, verifies
+the snapshot, then installs the matching kernel RPM and writes/read-back-checks
+those four partitions. It does not reboot automatically and does not touch
+`vbmeta`, recovery, firmware, GPT, or user data. After a successful update it
+keeps the five newest verified pre-update snapshots in the selected folder.
+The update is one privileged operation: if DNF or a raw image write fails, it
+attempts to restore the previous module tree and, when partition writes have
+begun, all four old images. It never reboots automatically. Each backup contains
+`READ-ME-TWRP.txt` and a module-restore script. Choose microSD/USB-OTG if
+possible, or copy the entire numbered folder somewhere TWRP can mount;
+TWRP may not be able to read Fedora's internal `linuxroot`.
+
 ## Reinstall or roll back
 
 To repair/update an existing install, repeat **Install once** and install the
@@ -56,5 +72,5 @@ only the newest build. To roll back, use a previously saved package:
 - Arch: `sudo pacman -U ./tab-companion-<older>-any.pkg.tar.zst`
 
 Linux-port packages can use a separate update channel when their port provides
-its own compatible Actions build and metadata. Kernel and boot-image updates
-remain manual TWRP installs.
+its own compatible Actions build and metadata. The X810 kernel/boot channel is
+specific to Fedora SM-X810 and is not shown on other devices or distributions.
