@@ -4,8 +4,10 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from contextlib import nullcontext
 from pathlib import Path
@@ -26,6 +28,15 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
             {name: Path(device).name for name, (device, _size) in self.original_partitions.items()},
             {"boot": "sda21", "init_boot": "sda22", "vendor_boot": "sda24", "dtbo": "sda30"},
         )
+
+    def test_kernel_update_lock_validates_its_regular_file(self):
+        fd, lock_path = tempfile.mkstemp(dir=self.root)
+        self.addCleanup(lambda: Path(lock_path).unlink(missing_ok=True))
+        fake_info = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0)
+        with patch.object(core.os, "open", return_value=fd), \
+             patch.object(core.os, "fstat", return_value=fake_info):
+            with core._update_lock():
+                pass
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
