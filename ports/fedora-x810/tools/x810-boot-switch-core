@@ -14,6 +14,20 @@ EXPECTED = {
     'boot': '/dev/sda21', 'init_boot': '/dev/sda22',
     'vendor_boot': '/dev/sda24', 'dtbo': '/dev/sda30',
 }
+MODEL_NODE = pathlib.Path('/proc/device-tree/model')
+COMPATIBLE_NODE = pathlib.Path('/proc/device-tree/compatible')
+
+
+def is_x810_device(model, compatible):
+    """Check board identity using the DT compatible list, not the display name.
+
+    The live SM-X810 FDT reports the human-readable model ``Samsung Galaxy
+    Tab S9+ Wi-Fi``; unlike the recovery/vendor name, it does not contain the
+    internal ``GTS9PWIFI`` codename.  The compatible list does contain the
+    board-specific ``samsung,gts9pwifi`` entry and is the authoritative gate.
+    """
+    entries = set(compatible.replace('\0', ' ').split())
+    return 'samsung,gts9pwifi' in entries or 'GTS9PWIFI' in model.upper()
 
 def emit(message):
     print(message, flush=True)
@@ -29,11 +43,18 @@ def device_path(part):
 
 def validate_device():
     try:
-        model = pathlib.Path('/proc/device-tree/model').read_bytes().rstrip(b'\0').decode()
+        model = MODEL_NODE.read_bytes().rstrip(b'\0').decode()
     except OSError:
         model = ''
-    if 'GTS9PWIFI' not in model:
-        raise RuntimeError(f'Not the expected SM-X810-family board ({model or "unknown model"})')
+    try:
+        compatible = COMPATIBLE_NODE.read_bytes().decode(errors='replace')
+    except OSError:
+        compatible = ''
+    if not is_x810_device(model, compatible):
+        shown_compatible = compatible.replace('\0', ', ').strip(', ') or 'unavailable'
+        raise RuntimeError(
+            'Not the expected SM-X810-family board '
+            f'(model={model or "unknown"}; compatible={shown_compatible})')
     root = subprocess.check_output(['findmnt', '-n', '-o', 'SOURCE', '/'], text=True).strip()
     if os.path.realpath(root) != '/dev/sda35':
         raise RuntimeError(f'Linux root is {root}, not the expected linuxroot /dev/sda35')
