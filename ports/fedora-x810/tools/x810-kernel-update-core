@@ -27,7 +27,6 @@ PARTITIONS = {
 }
 EXPECTED_MODEL = "SM-X810"
 EXPECTED_COMPATIBLE = "samsung,gts9pwifi"
-BACKUP_CONTAINER = "Tab Companion X810 Boot Backups"
 BACKUP_KIND = "tab-companion-x810-boot-backup"
 STAGING_ROOT = pathlib.Path("/var/cache/tab-companion/x810-kernel-update")
 MODULES_ROOT = pathlib.Path("/usr/lib/modules")
@@ -226,11 +225,7 @@ def _install_x810_rpm(path):
 
 
 def _create_backup(root, manifest, build_number, uid):
-    container = root / BACKUP_CONTAINER
-    container.mkdir(mode=0o755, exist_ok=True)
-    if container.is_symlink() or not container.is_dir():
-        raise ValueError("Backup container is not a normal directory")
-    build_dir = container / build_number
+    build_dir = root / build_number
     files_dir = build_dir / "files"
     if build_dir.exists():
         if build_dir.is_symlink() or not build_dir.is_dir():
@@ -272,7 +267,7 @@ def _create_backup(root, manifest, build_number, uid):
     free = shutil.disk_usage(root).free
     if free < needed:
         raise ValueError(f"Backup target has {free} bytes free; at least {needed} are needed")
-    temp = pathlib.Path(tempfile.mkdtemp(prefix=f".{build_number}.pending-", dir=container))
+    temp = pathlib.Path(tempfile.mkdtemp(prefix=f".{build_number}.pending-", dir=root))
     files_dir = temp / "files"
     files_dir.mkdir(mode=0o755)
     hashes = {}
@@ -362,7 +357,7 @@ def _create_backup(root, manifest, build_number, uid):
         _fsync_directory(files_dir)
         _fsync_directory(temp)
         os.rename(temp, build_dir)
-        _fsync_directory(container)
+        _fsync_directory(root)
         emit("step", f"Verified fallback snapshot saved at {build_dir}")
         return build_dir
     except Exception:
@@ -657,10 +652,7 @@ def apply(release_dir, backup_root, backup_device):
 
 
 def _apply_locked(release_root, selected, manifest, build_number, assets, backup_dir, backup_device):
-    container = selected / BACKUP_CONTAINER
-    if container.is_symlink() or not container.is_dir():
-        raise ValueError("Fallback backup container is missing or unsafe")
-    if backup_dir != container / build_number:
+    if backup_dir != selected / build_number:
         raise ValueError("Fallback snapshot path does not match this release build ID")
     record_path = backup_dir / "backup.json"
     if (backup_dir.is_symlink() or not backup_dir.is_dir()
@@ -760,7 +752,7 @@ def _apply_locked(release_root, selected, manifest, build_number, assets, backup
                 f"{update_error}. Do NOT reboot yet."
             ) from update_error
         try:
-            _prune_backups(container, keep=5)
+            _prune_backups(selected, keep=5)
         except Exception as prune_error:
             emit("warning", f"Update succeeded, but old-backup cleanup was skipped: {prune_error}")
         emit("done", f"X810 boot set updated and verified. Fallback saved at {backup_dir}; tablet was NOT rebooted.")

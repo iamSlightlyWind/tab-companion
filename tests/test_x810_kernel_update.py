@@ -46,8 +46,11 @@ class MemoryResponse:
 
 
 class X810ReleaseTests(unittest.TestCase):
-    def test_backup_container_name_is_exported_for_the_update_page(self):
-        self.assertEqual(update.BACKUP_CONTAINER, "Tab Companion X810 Boot Backups")
+    def test_fallback_path_placeholder_is_safe_for_gtk_markup(self):
+        page = Path(__file__).resolve().parents[1] / "src/tab_companion/x810_kernel_update_page.py"
+        source = page.read_text(encoding="utf-8")
+        self.assertNotIn("<build number>", source)
+        self.assertIn("BUILD_NUMBER/files", source)
 
     def setUp(self):
         self.old_partitions = update.PARTITIONS

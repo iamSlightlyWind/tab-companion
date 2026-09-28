@@ -15,6 +15,7 @@ Requires:       gtk4
 Requires:       libadwaita
 Requires:       glib2
 Requires:       polkit
+Requires:       mate-polkit
 Requires:       systemd
 Requires:       dbus
 Requires:       gnome-shell

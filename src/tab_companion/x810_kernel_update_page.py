@@ -11,7 +11,6 @@ from gi.repository import Adw, Gio, GLib, Gtk
 from .i18n import _
 from .updates import UpdateError
 from .x810_kernel_update import (
-    BACKUP_CONTAINER,
     DEFAULT_REPOSITORY,
     download_x810_release,
     fetch_latest_x810_release,
@@ -61,9 +60,7 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
         self.folder_row = folder_row
         if self.backup_folder:
             self.folder_row.set_subtitle(
-                _("Backups will be saved under {path}/BUILD_NUMBER/files.").format(
-                    path=os.path.join(self.backup_folder, BACKUP_CONTAINER)
-                )
+                _("Backups will be saved under {path}/BUILD_NUMBER/files.").format(path=self.backup_folder)
             )
 
         self.status = Adw.ActionRow(title=_("Not checked"), subtitle=_("Latest kernel release has not been checked."))
@@ -105,8 +102,7 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
                 raise UpdateError(_("The selected folder is not writable."))
             self.backup_device = save_backup_folder(path)
             self.backup_folder = path
-            output = os.path.join(path, BACKUP_CONTAINER)
-            self.folder_row.set_subtitle(_("Backups will be saved under {path}/BUILD_NUMBER/files.").format(path=output))
+            self.folder_row.set_subtitle(_("Backups will be saved under {path}/BUILD_NUMBER/files.").format(path=path))
             self._refresh_apply()
         except Exception as error:
             # The native chooser reports cancellation as a GLib error. Keep the
@@ -173,7 +169,7 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
         body = _(
             "Tab Companion will download and checksum kernel.rpm and all four X810 boot images. In one privileged update operation it will first save the currently running boot partitions and matching kernel-module tree to {path}/{number}/files, then reinstall the kernel RPM and write boot, init_boot, vendor_boot and dtbo with read-back verification. If the RPM or a partition write fails, it attempts to restore the previous matching module tree and, if partition writes began, all four saved images. It will not touch vbmeta, recovery, firmware, GPT or user data, and will not reboot automatically.\n\n"
             "Keep the selected drive connected throughout the update. TWRP may not see Fedora’s internal Linux filesystem. Prefer microSD/USB-OTG, or copy the numbered folder there before relying on it."
-        ).format(path=os.path.join(self.backup_folder, BACKUP_CONTAINER), number=self.release.build_number)
+        ).format(path=self.backup_folder, number=self.release.build_number)
         dialog = Adw.AlertDialog(
             heading=_("Install X810 kernel build {number}?").format(number=self.release.build_number),
             body=body,
@@ -244,7 +240,7 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
             self._set_status(
                 _("Kernel update staged successfully"),
                 _("All four partition writes were read-back verified. No reboot was performed. The saved fallback is under {path}. Restart only when ready.").format(
-                    path=os.path.join(self.backup_folder or "", BACKUP_CONTAINER)),
+                    path=self.backup_folder or ""),
             )
         else:
             self._set_status(_("Kernel update stopped"), detail, warning=True)

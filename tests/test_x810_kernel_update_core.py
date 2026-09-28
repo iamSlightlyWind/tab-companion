@@ -97,7 +97,7 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
     def test_backup_is_grouped_by_build_number_under_files_and_has_twrp_note(self):
         _release, manifest, _assets = self._release("101")
         path = self._make_backup(manifest, "101")
-        self.assertEqual(path, self.selected / core.BACKUP_CONTAINER / "101")
+        self.assertEqual(path, self.selected / "101")
         self.assertEqual({p.name for p in (path / "files").iterdir()},
                          {name + ".img" for name in core.PARTITIONS}
                          | {f"modules-{os.uname().release}.tar.gz"})
@@ -128,15 +128,15 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
         for build in range(100, 106):
             _release, manifest, _assets = self._release(str(build))
             self._make_backup(manifest, str(build))
-        container = self.selected / core.BACKUP_CONTAINER
-        core._prune_backups(container, keep=5)
-        remaining = sorted(entry.name for entry in container.iterdir()
+        core._prune_backups(self.selected, keep=5)
+        remaining = sorted(entry.name for entry in self.selected.iterdir()
                            if entry.is_dir() and entry.name.isdigit())
         self.assertEqual(remaining, ["101", "102", "103", "104", "105"])
-        user_dir = container / "unmanaged"
+        user_dir = self.selected / "2025"
         user_dir.mkdir()
-        core._prune_backups(container, keep=5)
-        self.assertTrue(user_dir.is_dir())
+        (user_dir / "keep.txt").write_text("unrelated user data")
+        core._prune_backups(self.selected, keep=5)
+        self.assertEqual((user_dir / "keep.txt").read_text(), "unrelated user data")
 
     def _prepare_apply(self, build="201"):
         release_dir, manifest, assets = self._release(build)

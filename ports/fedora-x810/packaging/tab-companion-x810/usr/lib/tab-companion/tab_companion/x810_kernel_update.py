@@ -27,7 +27,6 @@ from .updates import (
 
 PROJECT = "x810-fedroid"
 DEFAULT_REPOSITORY = "https://github.com/iamSlightlyWind/x810-fedroid"
-BACKUP_CONTAINER = "Tab Companion X810 Boot Backups"
 MANIFEST_NAME = "manifest.json"
 RELEASE_TAG = re.compile(r"^x810-fedora-port-build-([0-9]{1,20})$")
 COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
