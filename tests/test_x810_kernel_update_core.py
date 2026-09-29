@@ -126,14 +126,19 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
         for name, (device, _size) in core.PARTITIONS.items():
             self.assertEqual((path / "files" / (name + ".img")).read_bytes(), Path(device).read_bytes())
 
-    def test_same_build_backup_is_reused_only_if_live_bytes_still_match(self):
+    def test_same_build_backup_is_overwritten_with_new_live_snapshot(self):
         _release, manifest, _assets = self._release("102")
         first = self._make_backup(manifest, "102")
         self.assertEqual(self._make_backup(manifest, "102"), first)
         device = Path(core.PARTITIONS["boot"][0])
-        device.write_bytes(b"changed live partition".ljust(128, b"!"))
-        with self.assertRaisesRegex(ValueError, "Refusing to overwrite an existing backup"):
-            self._make_backup(manifest, "102")
+        changed = b"changed live partition".ljust(128, b"!")
+        device.write_bytes(changed)
+        replaced = self._make_backup(manifest, "102")
+        self.assertEqual(replaced, first)
+        self.assertEqual((replaced / "files/boot.img").read_bytes(), changed)
+        record = json.loads((replaced / "backup.json").read_text())
+        self.assertEqual(record["files"]["boot.img"]["sha256"], self._digest(changed))
+        self.assertFalse(list(self.selected.glob(".102.replaced-*")))
 
     def test_apply_revalidates_all_existing_snapshot_hashes_before_writing(self):
         release_dir, manifest, assets = self._release("103")

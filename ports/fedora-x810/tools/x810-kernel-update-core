@@ -227,24 +227,8 @@ def _install_x810_rpm(path):
 
 def _create_backup(root, manifest, build_number, uid):
     build_dir = root / build_number
-    files_dir = build_dir / "files"
-    if build_dir.exists():
-        if build_dir.is_symlink() or not build_dir.is_dir():
-            raise ValueError(f"Backup destination already exists and is unsafe: {build_dir}")
-        metadata = build_dir / "backup.json"
-        if metadata.is_file() and not metadata.is_symlink():
-            record = json.loads(metadata.read_text(encoding="utf-8"))
-            if (record.get("kind") == BACKUP_KIND
-                    and record.get("target_release_tag") == manifest["release_tag"]):
-                saved_hashes = record.get("files", {})
-                current_hashes = _partition_hashes()
-                if (set(saved_hashes) == {name + ".img" for name in PARTITIONS}
-                        and all(current_hashes[name.removesuffix(".img")] == value.get("sha256")
-                                for name, value in saved_hashes.items())):
-                    _verify_backup_files(build_dir, record)
-                    emit("step", f"Reusing the verified pre-update snapshot {build_dir}")
-                    return build_dir
-        raise ValueError(f"Refusing to overwrite an existing backup: {build_dir}; choose another folder")
+    if build_dir.is_symlink() or (build_dir.exists() and not build_dir.is_dir()):
+        raise ValueError(f"Backup destination already exists and is unsafe: {build_dir}")
 
     module_release = os.uname().release
     if not re.fullmatch(r"[A-Za-z0-9._+-]{1,120}", module_release):
@@ -357,9 +341,26 @@ def _create_backup(root, manifest, build_number, uid):
         _make_user_readable(temp, uid, directory=True)
         _fsync_directory(files_dir)
         _fsync_directory(temp)
-        os.rename(temp, build_dir)
+        # Snapshot is complete and verified before replacing an older snapshot.
+        # Move the previous real directory aside on the same filesystem, promote
+        # the new one atomically, and roll back the rename if promotion fails.
+        old_dir = None
+        if build_dir.exists():
+            old_dir = pathlib.Path(tempfile.mkdtemp(prefix=f".{build_number}.replaced-", dir=root))
+            old_dir.rmdir()
+            os.rename(build_dir, old_dir)
+        try:
+            os.rename(temp, build_dir)
+            _fsync_directory(root)
+        except Exception:
+            if old_dir is not None and old_dir.exists() and not build_dir.exists():
+                os.rename(old_dir, build_dir)
+                _fsync_directory(root)
+            raise
+        if old_dir is not None:
+            shutil.rmtree(old_dir)
         _fsync_directory(root)
-        emit("step", f"Verified fallback snapshot saved at {build_dir}")
+        emit("step", f"Verified fallback snapshot saved at {build_dir} (existing snapshot overwritten)")
         return build_dir
     except Exception:
         shutil.rmtree(temp, ignore_errors=True)
