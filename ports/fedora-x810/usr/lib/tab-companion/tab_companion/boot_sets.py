@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 """UI-side client for the boot switch, kept off the main thread.
 
-Every privileged step goes through pkexec: reading is allowed silently, and
-changing the system asks for a password.  Nothing here touches a block device
-directly, which is the same boundary hardware.py draws for sysfs.
+Fedora uses the shared allowlisted Tab Companion admin helper, authenticated
+once at app start through Polkit. Other package stages retain their original
+fixed-helper pkexec flow. No boot block access happens in the UI process.
 """
 
 import json
@@ -13,6 +13,7 @@ import threading
 
 from gi.repository import GLib
 
+from .admin_auth import command as admin_command
 
 STATUS_HELPER = "/usr/local/libexec/tab-companion-boot-status"
 SWITCH_HELPER = "/usr/local/libexec/tab-companion-boot-switch"
@@ -28,7 +29,7 @@ def read_status(on_done):
         result = {"current": None, "sets": [], "error": None}
         try:
             completed = subprocess.run(
-                ["pkexec", STATUS_HELPER],
+                admin_command("boot-status", STATUS_HELPER),
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -50,7 +51,7 @@ def switch(set_id, reboot, on_progress, on_done):
     def worker():
         ok = False
         try:
-            argv = ["pkexec", SWITCH_HELPER, set_id]
+            argv = admin_command("boot-switch", SWITCH_HELPER, set_id)
             if reboot:
                 argv.append("--reboot")
             process = subprocess.Popen(

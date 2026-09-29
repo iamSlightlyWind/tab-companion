@@ -10,6 +10,7 @@ from pathlib import Path
 from gi.repository import Adw, Gdk, GLib, Gtk
 
 from . import VERSION
+from .admin_auth import command as admin_command
 from .aur import build_aur_package
 from .i18n import _
 from .updates import (
@@ -63,7 +64,7 @@ class UpdatesPage(Adw.PreferencesPage):
         # the surrounding preference rows or changing their labels.
         self._button_css = Gtk.CssProvider()
         self._button_css.load_from_data(
-            b"button.update-action { min-height: 28px; padding-top: 2px; padding-bottom: 2px; }"
+            b"button.update-action { min-height: 28px; padding-top: 1px; padding-bottom: 1px; padding-left: 10px; padding-right: 10px; }"
         )
         display = Gdk.Display.get_default()
         if display is not None:
@@ -145,9 +146,19 @@ class UpdatesPage(Adw.PreferencesPage):
         status_icon = Gtk.Image(icon_name="software-update-available-symbolic")
         status.add_prefix(status_icon)
         group.add(status)
-        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        check = Gtk.Button(label=_("Check"), css_classes=["pill", "update-action"])
-        install = Gtk.Button(label=_("Install update"), css_classes=["pill", "suggested-action", "update-action"], sensitive=False)
+        buttons = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
+            valign=Gtk.Align.CENTER, vexpand=False,
+        )
+        check = Gtk.Button(
+            label=_("Check"), css_classes=["pill", "update-action"],
+            valign=Gtk.Align.CENTER, vexpand=False,
+        )
+        install = Gtk.Button(
+            label=_("Install update"),
+            css_classes=["pill", "suggested-action", "update-action"],
+            sensitive=False, valign=Gtk.Align.CENTER, vexpand=False,
+        )
         buttons.append(check)
         buttons.append(install)
         actions = Adw.ActionRow(title=_("Build actions"))
@@ -296,10 +307,12 @@ class UpdatesPage(Adw.PreferencesPage):
                     for block in iter(lambda: package_file.read(1024 * 1024), b""):
                         digest_obj.update(block)
                 digest = digest_obj.hexdigest()
-                command = ["pkexec", INSTALL_HELPER, "--path", str(package), "--sha256", digest,
-                           "--format", fmt, "--package-name", asset.package_name,
-                           "--package-version", asset.package_version,
-                           "--expected-arch", self.target["arch"]]
+                command = admin_command(
+                    "install-package", INSTALL_HELPER, "--path", str(package), "--sha256", digest,
+                    "--format", fmt, "--package-name", asset.package_name,
+                    "--package-version", asset.package_version,
+                    "--expected-arch", self.target["arch"],
+                )
                 result = subprocess.run(command, check=False, text=True, stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, env={**os.environ, "LC_ALL": "C"})
                 if result.returncode:

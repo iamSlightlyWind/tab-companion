@@ -18,3 +18,14 @@ class UiLabelTests(unittest.TestCase):
         self.assertIn("padding-top", css)
         self.assertIn("padding-bottom", css)
         self.assertNotIn("padding:", css)
+        self.assertIn("28px", css)
+
+    def test_folder_dialog_dismissal_is_treated_as_cancellation(self):
+        source = (ROOT / "src/tab_companion/x810_kernel_update_page.py").read_text(encoding="utf-8")
+        self.assertIn("Gtk.DialogError.CANCELLED", source)
+        self.assertIn("Gtk.DialogError.DISMISSED", source)
+        self.assertIn("Gtk.dialog_error_quark()", source)
+
+    def test_app_and_port_update_buttons_do_not_fill_tall_rows(self):
+        source = (ROOT / "src/tab_companion/updates_page.py").read_text(encoding="utf-8")
+        self.assertGreaterEqual(source.count("valign=Gtk.Align.CENTER, vexpand=False"), 3)

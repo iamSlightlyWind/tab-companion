@@ -8,9 +8,10 @@ import threading
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
+from .admin_auth import command as admin_command
 from .i18n import _
 from .updates import UpdateError
-from .x810_fallbacks import list_snapshots
+from .x810_fallbacks import list_snapshot_candidates
 from .x810_kernel_update import (
     DEFAULT_REPOSITORY,
     download_x810_release,
@@ -54,7 +55,10 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
             title=_("Fallback folder"),
             subtitle=_("Not selected — kernel updates are disabled until you choose a folder."),
         )
-        self.folder_button = Gtk.Button(label=_("Choose folder…"), css_classes=["pill"])
+        self.folder_button = Gtk.Button(
+            label=_("Choose folder…"), css_classes=["pill", "update-action"],
+            valign=Gtk.Align.CENTER, vexpand=False,
+        )
         self.folder_button.connect("clicked", self._choose_folder)
         folder_row.add_suffix(self.folder_button)
         self.add(folder_row)
@@ -66,9 +70,12 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
 
         self.fallback_status = Adw.ActionRow(
             title=_("Cached fallback boot sets"),
-            subtitle=_("Choose a fallback folder to list verified snapshots by build number."),
+            subtitle=_("Choose a folder to list snapshots by build number; checksums are rechecked before restore."),
         )
-        self.fallback_button = Gtk.Button(label=_("List and restore…"), css_classes=["pill"], sensitive=False)
+        self.fallback_button = Gtk.Button(
+            label=_("List and restore…"), css_classes=["pill", "update-action"],
+            sensitive=False, valign=Gtk.Align.CENTER, vexpand=False,
+        )
         self.fallback_button.connect("clicked", self._show_fallbacks)
         self.fallback_status.add_suffix(self.fallback_button)
         self.add(self.fallback_status)
@@ -81,9 +88,13 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
         self.add(self.status)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.check_button = Gtk.Button(label=_("Check"), css_classes=["pill"])
+        self.check_button = Gtk.Button(
+            label=_("Check"), css_classes=["pill", "update-action"],
+            valign=Gtk.Align.CENTER, vexpand=False,
+        )
         self.apply_button = Gtk.Button(label=_("Install kernel update"),
-                                       css_classes=["pill", "suggested-action"], sensitive=False)
+                                       css_classes=["pill", "suggested-action", "update-action"],
+                                       sensitive=False, valign=Gtk.Align.CENTER, vexpand=False)
         self.check_button.connect("clicked", self._check)
         self.apply_button.connect("clicked", self._confirm_apply)
         actions.append(self.check_button)
@@ -118,10 +129,18 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
             self._refresh_fallbacks()
             self._refresh_apply()
         except Exception as error:
-            # The native chooser reports cancellation as a GLib error. Keep the
-            # previous selection intact and show only real validation errors.
-            cancelled = (isinstance(error, GLib.Error)
-                         and error.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED))
+            # Gtk.FileDialog uses Gtk.DialogError.{CANCELLED,DISMISSED}; older
+            # backends can still surface Gio's cancellation code. A user
+            # closing the chooser is not a rejected folder.
+            cancelled = False
+            if isinstance(error, GLib.Error):
+                cancelled = any(
+                    error.matches(Gtk.dialog_error_quark(), code)
+                    for code in (Gtk.DialogError.CANCELLED, Gtk.DialogError.DISMISSED)
+                )
+                cancelled = cancelled or error.matches(
+                    Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED
+                )
             if not cancelled:
                 self._set_status(_("Fallback folder not accepted"), str(error), warning=True)
         finally:
@@ -166,13 +185,15 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
         self._fallbacks = []
         if not self.backup_folder or self.backup_device is None:
             self.fallback_status.set_subtitle(
-                _("Choose a fallback folder to list verified snapshots by build number."))
+                _("Choose a fallback folder to list snapshots by build number."))
             self.fallback_button.set_sensitive(False)
             return
         try:
-            self._fallbacks = list_snapshots(self.backup_folder, expected_device=self.backup_device)
+            self._fallbacks = list_snapshot_candidates(
+                self.backup_folder, expected_device=self.backup_device
+            )
             self.fallback_status.set_subtitle(
-                _("{count} complete, checksum-verified fallback set(s) found.").format(
+                _("{count} fallback set(s) found; checksums are verified before restore.").format(
                     count=len(self._fallbacks)))
             self.fallback_button.set_sensitive(bool(self._fallbacks) and not self._busy)
         except Exception as error:
@@ -190,7 +211,7 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
         toolbar.add_top_bar(Adw.HeaderBar())
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         note = Gtk.Label(
-            label=_("Only complete snapshots whose four images, kernel modules, and metadata pass checksum validation are shown."),
+            label=_("Snapshots are listed after a quick structure/size check. The privileged restore step verifies every checksum before writing."),
             wrap=True, xalign=0,
         )
         note.set_margin_top(12)
@@ -251,8 +272,9 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
         def work():
             try:
                 result = self._run_helper(
-                    ["pkexec", KERNEL_HELPER, "restore", "--backup-root", self.backup_folder,
-                     "--backup-device", str(self.backup_device), "--build-number", snapshot.build_number],
+                    admin_command("kernel-update", KERNEL_HELPER, "restore", "--backup-root",
+                                  self.backup_folder, "--backup-device", str(self.backup_device),
+                                  "--build-number", snapshot.build_number),
                     _("Restoring cached boot images and matching modules…"),
                 )
                 outcome = (True, result)
@@ -326,8 +348,9 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
             try:
                 release_dir = download_x810_release(release, progress=progress)
                 update_result = self._run_helper(
-                    ["pkexec", KERNEL_HELPER, "apply", "--release-dir", str(release_dir),
-                     "--backup-root", backup_folder, "--backup-device", str(backup_device)],
+                    admin_command("kernel-update", KERNEL_HELPER, "apply", "--release-dir",
+                                  str(release_dir), "--backup-root", backup_folder,
+                                  "--backup-device", str(backup_device)),
                     _("Saving fallback and applying the kernel update…"),
                 )
                 result = (True, update_result)

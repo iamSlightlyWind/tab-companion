@@ -1,0 +1,72 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Polkit-cached dispatcher to existing, fixed Tab Companion root helpers."""
+
+import os
+import re
+import sys
+
+
+HELPERS = {
+    "boot-status": "/usr/local/libexec/tab-companion-boot-status",
+    "boot-switch": "/usr/local/libexec/tab-companion-boot-switch",
+    "install-package": "/usr/libexec/tab-companion-install-package",
+    "kernel-update": "/usr/local/libexec/tab-companion-kernel-update",
+    "power-profile": "/usr/libexec/tab-companion-power-profile",
+    "keyboard-recover": "/usr/libexec/tab-companion-keyboard-recover",
+    "keyboard-diagnostics": "/usr/libexec/tab-companion-keyboard-diagnostics",
+}
+PROFILE_IDS = {"power-saver", "balanced", "performance"}
+
+
+def requesting_uid() -> int:
+    value = os.environ.get("PKEXEC_UID", "")
+    if not value.isdecimal() or int(value) == 0:
+        raise ValueError("Must be invoked by pkexec for an unprivileged desktop user")
+    if os.geteuid() != 0:
+        raise ValueError("Administrator privileges are required")
+    return int(value)
+
+
+def validate(operation: str, args: list[str]) -> tuple[str, list[str]]:
+    """Resolve a finite operation set; never accepts arbitrary executable paths."""
+    helper = HELPERS.get(operation)
+    if helper is None:
+        raise ValueError("Unsupported privileged operation")
+    if operation in {"boot-status", "keyboard-recover"} and args:
+        raise ValueError("This operation accepts no arguments")
+    if operation == "boot-switch":
+        if (len(args) not in (1, 2) or not re.fullmatch(r"[a-z0-9_-]{1,32}", args[0])
+                or (len(args) == 2 and args[1] != "--reboot")):
+            raise ValueError("Invalid boot-switch request")
+    if operation == "kernel-update" and (not args or args[0] not in {"apply", "restore"}):
+        raise ValueError("Invalid kernel-update request")
+    if operation == "power-profile" and (len(args) != 1 or args[0] not in PROFILE_IDS):
+        raise ValueError("Invalid power-profile request")
+    if operation == "keyboard-diagnostics" and args not in ([], ["--record-keys"]):
+        raise ValueError("Invalid keyboard-diagnostics request")
+    # Package/kernel helpers apply their own detailed path, checksum, model,
+    # partition, and package-metadata validation. argv remains an array (never
+    # shell-expanded) and the executable remains fixed above.
+    return helper, args
+
+
+def main(argv: list[str]) -> int:
+    try:
+        requesting_uid()
+        if argv == ["--authorize"]:
+            print("Administrator authorization ready.")
+            return 0
+        if len(argv) >= 2 and argv[0] == "--run":
+            helper, args = validate(argv[1], argv[2:])
+            if not os.path.isfile(helper) or not os.access(helper, os.X_OK):
+                raise ValueError("The requested administrator helper is not installed")
+            os.execv(helper, [helper, *args])
+        raise ValueError("Expected --authorize or --run OPERATION")
+    except (OSError, ValueError) as error:
+        print(f"tab-companion-admin: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

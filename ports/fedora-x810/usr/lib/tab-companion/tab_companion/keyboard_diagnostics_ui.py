@@ -9,6 +9,7 @@ import tempfile
 import shutil
 
 from gi.repository import Adw, Gio, GLib, Gtk
+from .admin_auth import command as admin_command
 from .i18n import _
 from .keyboard_diagnostics import collect_session
 
@@ -87,7 +88,7 @@ def recover_controller(parent):
 
     def worker():
         try:
-            result = subprocess.run(["pkexec", helper], capture_output=True, text=True,
+            result = subprocess.run(admin_command("keyboard-recover", helper), capture_output=True, text=True,
                                     encoding="utf-8", timeout=25, check=False)
             if result.returncode == 0:
                 outcome = (True, result.stdout.strip() or _("Controller reset completed."))
@@ -148,7 +149,9 @@ def collect(parent):
                     "io.github.agcarbajo.TabCompanion.Hardware", method, None, None,
                     Gio.DBusCallFlags.NONE, 3000, None)
             started = False
-            with subprocess.Popen(["pkexec", "/usr/libexec/tab-companion-keyboard-diagnostics", "--record-keys"],
+            with subprocess.Popen(admin_command(
+                    "keyboard-diagnostics", "/usr/libexec/tab-companion-keyboard-diagnostics",
+                    "--record-keys"),
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, encoding="utf-8") as process:
                 timeout = threading.Timer(120, process.kill)

@@ -35,7 +35,7 @@ def replace_tree(source: Path, target: Path):
 
 def sync_ubuntu():
     for name in (
-        "__init__.py", "aur.py", "updates.py", "updates_page.py", "package_installer.py",
+        "__init__.py", "admin_auth.py", "aur.py", "updates.py", "updates_page.py", "package_installer.py",
         "update_languages.py", "update_translations.py",
     ):
         shutil.copy2(SOURCE / name, UBUNTU_PACKAGE / name)

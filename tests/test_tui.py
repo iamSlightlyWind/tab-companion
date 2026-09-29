@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tab_companion import tui
+from tab_companion import admin_auth
 from tab_companion.main import main as app_main
 from tab_companion.x810_fallbacks import FallbackSnapshot
 
@@ -26,6 +27,7 @@ class CompanionTuiTests(unittest.TestCase):
         output = io.StringIO()
         with patch.object(tui, "host_target", return_value={"device": "SM-X810"}), \
              patch.object(tui, "package_manager", return_value="rpm"), \
+             patch.object(tui, "admin_available", return_value=False), \
              patch.object(tui, "_run_kernel_update") as kernel:
             self.assertEqual(tui.main(input_fn=lambda _prompt: next(answers),
                                       output_fn=lambda text: output.write(text + "\n")), 0)
@@ -39,11 +41,13 @@ class CompanionTuiTests(unittest.TestCase):
         answers = iter(("36390000000", "RESTORE X810 BUILD 36390000000"))
         with patch.object(tui, "_fallback_folder", return_value=("/media/fallback", 123)), \
              patch.object(tui, "list_snapshots", return_value=[snapshot]), \
+             patch.object(admin_auth, "available", return_value=True), \
              patch.object(tui.subprocess, "run") as run:
             tui._run_fallback_restore(input_fn=lambda _prompt: next(answers), output_fn=outputs.append)
         run.assert_called_once_with(
-            ["pkexec", tui.KERNEL_HELPER, "restore", "--backup-root", "/media/fallback",
-             "--backup-device", "123", "--build-number", "36390000000"],
+            ["pkexec", admin_auth.ADMIN_HELPER, "--run", "kernel-update", "restore",
+             "--backup-root", "/media/fallback", "--backup-device", "123",
+             "--build-number", "36390000000"],
             check=True, env=unittest.mock.ANY,
         )
         self.assertTrue(any("No reboot" in line for line in outputs))

@@ -53,9 +53,22 @@ class X810FallbackValidationTests(unittest.TestCase):
         self.assertEqual([item.build_number for item in snapshots], ["36390000000"])
         self.assertEqual(snapshots[0].source_kernel_release, "7.2.0-gts9wifi")
 
+    def test_fast_candidate_listing_does_not_hash_large_files(self):
+        with patch.object(fallbacks, "_hash", side_effect=AssertionError("unexpected slow hash")):
+            snapshots = fallbacks.list_snapshot_candidates(
+                self.root, expected_device=self.root.stat().st_dev
+            )
+        self.assertEqual([item.build_number for item in snapshots], ["36390000000"])
+
     def test_rejects_modified_boot_image_and_omits_it_from_listing(self):
         (self.files / "boot.img").write_bytes(b"tampered".ljust(24, b"?"))
         self.assertEqual(fallbacks.list_snapshots(self.root), [])
+        # The GUI may display a structurally valid candidate quickly; its
+        # privileged restore helper performs the full content-hash check.
+        self.assertEqual(
+            [item.build_number for item in fallbacks.list_snapshot_candidates(self.root)],
+            ["36390000000"],
+        )
         with self.assertRaisesRegex(Exception, "failed integrity validation"):
             fallbacks.verify_snapshot(self.build, root=self.root)
 

@@ -9,6 +9,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .admin_auth import (
+    available as admin_available,
+    authorize_at_startup,
+    command as admin_command,
+)
 from .updates import (
     APP_BUILD_ARTIFACTS,
     APP_PROJECT,
@@ -107,9 +112,11 @@ def _run_package_channel(key: str, *, input_fn=input, output_fn=print):
     with package.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
-    command = ["pkexec", INSTALL_HELPER, "--path", str(package), "--sha256", digest.hexdigest(),
-               "--format", asset.format, "--package-name", asset.package_name,
-               "--package-version", asset.package_version, "--expected-arch", target["arch"]]
+    command = admin_command(
+        "install-package", INSTALL_HELPER, "--path", str(package), "--sha256", digest.hexdigest(),
+        "--format", asset.format, "--package-name", asset.package_name,
+        "--package-version", asset.package_version, "--expected-arch", target["arch"],
+    )
     subprocess.run(command, check=True, env={**os.environ, "LC_ALL": "C"})
     output_fn("Package update installed. Restart Tab Companion to load an app update.")
 
@@ -156,8 +163,9 @@ def _run_kernel_update(*, input_fn=input, output_fn=print):
         percentage = 100 if not total else int(100 * complete / total)
         output_fn(f"{'Cached' if cached else 'Fetching'} {name}: {percentage}%")
     release_dir = download_x810_release(release, progress=progress)
-    subprocess.run(["pkexec", KERNEL_HELPER, "apply", "--release-dir", str(release_dir),
-                    "--backup-root", folder, "--backup-device", str(device)],
+    subprocess.run(admin_command("kernel-update", KERNEL_HELPER, "apply", "--release-dir",
+                                 str(release_dir), "--backup-root", folder, "--backup-device",
+                                 str(device)),
                    check=True, env={**os.environ, "LC_ALL": "C"})
     output_fn("Kernel and boot images installed and read-back verified. Reboot only when ready.")
 
@@ -185,14 +193,19 @@ def _run_fallback_restore(*, input_fn=input, output_fn=print):
     if input_fn(f"Type exactly `{phrase}` to confirm: ").strip() != phrase:
         output_fn("Cancelled; no restore started.")
         return
-    subprocess.run(["pkexec", KERNEL_HELPER, "restore", "--backup-root", folder,
-                    "--backup-device", str(device), "--build-number", snapshot.build_number],
+    subprocess.run(admin_command("kernel-update", KERNEL_HELPER, "restore", "--backup-root",
+                                 folder, "--backup-device", str(device), "--build-number",
+                                 snapshot.build_number),
                    check=True, env={**os.environ, "LC_ALL": "C"})
     output_fn("Fallback images and matching kernel modules restored and read-back verified. No reboot was performed.")
 
 
 def main(argv=None, *, input_fn=input, output_fn=print):
     del argv  # Reserved for future TUI-only flags; menu actions stay deliberately narrow.
+    if admin_available():
+        output_fn("Requesting administrator authorization for this Tab Companion session…")
+        if not authorize_at_startup():
+            output_fn("Authorization cancelled; privileged actions will request it if needed.")
     target, manager = host_target(), package_manager()
     handlers = {
         "app": lambda: _run_package_channel("app", input_fn=input_fn, output_fn=output_fn),

@@ -11,6 +11,7 @@ import subprocess
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
+from .admin_auth import command as admin_command
 from .i18n import _
 
 
@@ -109,7 +110,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
         self.status_row.set_subtitle(_("Authorizing profile change…"))
         try:
             self._process = Gio.Subprocess.new(
-                ["pkexec", HELPER, profile_id],
+                admin_command("power-profile", HELPER, profile_id),
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
             )
             self._process.communicate_utf8_async(None, None, self._change_finished, profile_id)

@@ -55,7 +55,8 @@ def _regular(path: Path, *, owners: tuple[int, ...], max_size: int | None = None
 
 
 def verify_snapshot(path: str | Path, *, root: str | Path | None = None,
-                    expected_device: int | None = None) -> FallbackSnapshot:
+                    expected_device: int | None = None,
+                    verify_hashes: bool = True) -> FallbackSnapshot:
     """Validate a numbered snapshot's structure and every recorded digest.
 
     This is a UI-side filter only. The privileged restore helper repeats these
@@ -108,7 +109,7 @@ def verify_snapshot(path: str | Path, *, root: str | Path | None = None,
             raise UpdateError(f"Fallback metadata has invalid checksum for {name}")
         file_path = files_dir / name
         file_info = _regular(file_path, owners=(user, 0), max_size=size)
-        if file_info.st_size != size or _hash(file_path) != digest:
+        if file_info.st_size != size or (verify_hashes and _hash(file_path) != digest):
             raise UpdateError(f"Fallback image failed integrity validation: {name}")
 
     module = record.get("module_backup")
@@ -123,13 +124,14 @@ def verify_snapshot(path: str | Path, *, root: str | Path | None = None,
     module_hash = module.get("sha256")
     if (archive_info.st_size != module.get("size_bytes")
             or not isinstance(module_hash, str) or not HEX.fullmatch(module_hash)
-            or _hash(archive_path) != module_hash):
+            or (verify_hashes and _hash(archive_path) != module_hash)):
         raise UpdateError("Fallback kernel-module archive failed integrity validation")
 
     script = path / "restore-modules-in-twrp.sh"
     script_info = _regular(script, owners=(user, 0), max_size=1024 * 1024)
     script_hash = record.get("restore_script_sha256")
-    if not isinstance(script_hash, str) or not HEX.fullmatch(script_hash) or _hash(script) != script_hash:
+    if (not isinstance(script_hash, str) or not HEX.fullmatch(script_hash)
+            or (verify_hashes and _hash(script) != script_hash)):
         raise UpdateError("Fallback TWRP module-restore script failed integrity validation")
     return FallbackSnapshot(path.name, path, str(record.get("created_utc", "")),
                             str(record.get("source_kernel_release", "")))
@@ -148,6 +150,32 @@ def list_snapshots(root: str | Path, *, expected_device: int | None = None) -> l
             continue
         try:
             results.append(verify_snapshot(entry, root=root, expected_device=expected_device))
+        except UpdateError:
+            continue
+    return sorted(results, key=lambda snapshot: int(snapshot.build_number), reverse=True)
+
+
+def list_snapshot_candidates(root: str | Path, *,
+                              expected_device: int | None = None) -> list[FallbackSnapshot]:
+    """Quick UI listing; the privileged restorer verifies all content hashes.
+
+    Hashing hundreds of MiB per snapshot on GTK's main loop made the picker
+    appear frozen. This pass checks identity, structure, ownership, sizes and
+    checksum-field syntax only. It does not authorize flashing: the privileged
+    helper revalidates every digest immediately before writing partitions.
+    """
+    root = Path(os.path.abspath(root))
+    if root.is_symlink() or not root.is_dir() or os.path.realpath(root) != str(root):
+        raise UpdateError("Choose an existing fallback folder")
+    if expected_device is not None and root.stat().st_dev != expected_device:
+        raise UpdateError("The fallback drive is no longer mounted at the selected folder")
+    results = []
+    for entry in root.iterdir():
+        if not BUILD.fullmatch(entry.name):
+            continue
+        try:
+            results.append(verify_snapshot(entry, root=root, expected_device=expected_device,
+                                           verify_hashes=False))
         except UpdateError:
             continue
     return sorted(results, key=lambda snapshot: int(snapshot.build_number), reverse=True)

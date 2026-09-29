@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<policyconfig>
+  <vendor>Tab Companion for Samsung Galaxy tablets</vendor>
+  <vendor_url>https://github.com/iamSlightlyWind/tab-companion</vendor_url>
+  <action id="io.github.agcarbajo.TabCompanion.admin">
+    <description>Authorize Tab Companion's allowlisted system operations</description>
+    <message>Authentication is required to manage this tablet</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/tab-companion-admin</annotate>
+  </action>
+</policyconfig>

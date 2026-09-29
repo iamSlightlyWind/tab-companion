@@ -20,17 +20,21 @@ class KeyboardRecoverTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
-        self.device = root / "bus/i2c/devices/10-002a"
+        # I2C bus numbering varies between boots/releases; discovery must use
+        # the X810 device-tree compatible rather than hardcoding bus 10.
+        self.device = root / "bus/i2c/devices/9-002a"
         self.driver = root / "bus/i2c/drivers/samsung-gts9u-stm32-pogo"
         self.device.mkdir(parents=True)
         self.driver.mkdir(parents=True)
-        (self.device / "name").write_text("gts9u-stm32-pogo\n")
+        (self.device / "uevent").write_text(
+            "DRIVER=samsung-gts9u-stm32-pogo\n"
+            "OF_COMPATIBLE_0=samsung,gts9pwifi-stm32-pogo\n")
         (self.device / "diagnostics").write_text(
-            "attached=1 model=0xfb connected=1 data_ready=0\n")
+            "attached=1 powered=1 model=0xfb connected=1 data_ready=0\n")
         (self.driver / "unbind").touch()
         (self.driver / "bind").touch()
         (self.device / "driver").symlink_to(self.driver)
-        keyboard_recover.DEVICE_PATH = self.device
+        keyboard_recover.DEVICES_ROOT = self.device.parent
         keyboard_recover.DRIVER_PATH = self.driver
 
     def tearDown(self):
@@ -45,6 +49,11 @@ class KeyboardRecoverTests(unittest.TestCase):
                 return len(data)
             if path == self.driver / "bind":
                 (self.device / "driver").symlink_to(self.driver)
+                fields = keyboard_recover.diagnostics(self.device)
+                if fields.get("bootloader") == "1":
+                    (self.device / "diagnostics").write_text(
+                        "attached=1 powered=1 connected=1 model=0xfb "
+                        "bootloader=0 flash_version=00370037 data_ready=0\n")
                 return len(data)
             return original_write_text(path, data, *args, **kwargs)
 
@@ -77,6 +86,21 @@ class KeyboardRecoverTests(unittest.TestCase):
             self.run_as_root()
         self.assertEqual(error.exception.code, 1)
         self.assertTrue((self.device / "driver").is_symlink())
+
+    def test_recovers_expected_x810_bootloader_even_before_app_model_probe(self):
+        (self.device / "diagnostics").write_text(
+            "attached=0 powered=1 connected=1 bootloader=1 "
+            "flash_version=00370037 model=0x00 data_ready=0\n")
+        result = self.run_as_root()
+        self.assertIn("controller reset and reinitialized", result)
+
+    def test_refuses_ambiguous_or_non_x810_i2c_clients(self):
+        other = self.device.parent / "10-002a"
+        other.mkdir()
+        (other / "uevent").write_text("OF_COMPATIBLE_0=other,pogo\n")
+        (other / "diagnostics").write_text("attached=1 model=0xfb connected=1\n")
+        result = self.run_as_root()
+        self.assertIn("controller reset and reinitialized", result)
 
 
 if __name__ == "__main__":
