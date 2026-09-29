@@ -24,8 +24,12 @@ install -m 0755 tools/tab-companion-kernel-update \
     "$stage/usr/local/libexec/tab-companion-kernel-update"
 install -m 0755 usr/libexec/tab-companion-keyboard-recover \
     "$stage/usr/libexec/tab-companion-keyboard-recover"
+install -m 0755 tools/tab-companion-power-profile \
+    "$stage/usr/libexec/tab-companion-power-profile"
 install -m 0644 packaging/io.github.agcarbajo.TabCompanion.X810.policy \
     "$stage/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.X810.policy"
+install -m 0644 packaging/tab-companion-x810/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.PowerProfile.policy \
+    "$stage/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.PowerProfile.policy"
 install -m 0644 packaging/tab-companion-polkit-agent.desktop \
     "$stage/etc/xdg/autostart/tab-companion-polkit-agent.desktop"
 python3 "$app_root/tools/write-app-build-metadata.py" "$stage"

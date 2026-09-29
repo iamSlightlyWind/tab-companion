@@ -1,0 +1,35 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Allowlisted privileged writer for the system PowerProfiles D-Bus property."""
+
+import subprocess
+import sys
+
+
+PROFILES = {"power-saver", "balanced", "performance"}
+DESTINATION = (
+    "/usr/bin/busctl",
+    "--system",
+    "set-property",
+    "net.hadess.PowerProfiles",
+    "/net/hadess/PowerProfiles",
+    "net.hadess.PowerProfiles",
+    "ActiveProfile",
+    "s",
+)
+
+
+def main(argv):
+    if len(argv) != 2 or argv[1] not in PROFILES:
+        print("usage: tab-companion-power-profile {power-saver|balanced|performance}", file=sys.stderr)
+        return 2
+    try:
+        subprocess.run((*DESTINATION, argv[1]), check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Could not set power profile: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

@@ -10,6 +10,7 @@ from .actions import action_for, action_label, actions_for
 from .hardware import HardwareClient
 from .i18n import _, N_
 from .key_selector import KeyChooser, chord_label
+from .power_profiles_page import PowerProfilesPage, available as power_profiles_available
 from .updates_page import UpdatesPage, legacy_ubuntu_update_available
 
 
@@ -193,6 +194,10 @@ class CompanionWindow(Adw.ApplicationWindow):
         self.view_stack.add_titled_with_icon(
             self._haptics_page(), "haptics", _("Haptics"), "phone-symbolic"
         )
+        if power_profiles_available():
+            self.view_stack.add_titled_with_icon(
+                PowerProfilesPage(), "performance", _("Performance"), "battery-level-60-symbolic"
+            )
         if boot_sets.available():
             self.view_stack.add_titled_with_icon(
                 self._system_page(), "dualboot", _("Dualboot"), "drive-multidisk-symbolic"
