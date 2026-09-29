@@ -10,6 +10,7 @@ from gi.repository import Adw, Gio, GLib, Gtk
 
 from .i18n import _
 from .updates import UpdateError
+from .x810_fallbacks import list_snapshots
 from .x810_kernel_update import (
     DEFAULT_REPOSITORY,
     download_x810_release,
@@ -63,6 +64,17 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
                 _("Backups will be saved under {path}/BUILD_NUMBER/files.").format(path=self.backup_folder)
             )
 
+        self.fallback_status = Adw.ActionRow(
+            title=_("Cached fallback boot sets"),
+            subtitle=_("Choose a fallback folder to list verified snapshots by build number."),
+        )
+        self.fallback_button = Gtk.Button(label=_("List and restore…"), css_classes=["pill"], sensitive=False)
+        self.fallback_button.connect("clicked", self._show_fallbacks)
+        self.fallback_status.add_suffix(self.fallback_button)
+        self.add(self.fallback_status)
+        self._fallbacks = []
+        self._refresh_fallbacks()
+
         self.status = Adw.ActionRow(title=_("Not checked"), subtitle=_("Latest kernel release has not been checked."))
         self.status_icon = Gtk.Image(icon_name="software-update-available-symbolic")
         self.status.add_prefix(self.status_icon)
@@ -103,6 +115,7 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
             self.backup_device = save_backup_folder(path)
             self.backup_folder = path
             self.folder_row.set_subtitle(_("Backups will be saved under {path}/BUILD_NUMBER/files.").format(path=path))
+            self._refresh_fallbacks()
             self._refresh_apply()
         except Exception as error:
             # The native chooser reports cancellation as a GLib error. Keep the
@@ -149,10 +162,123 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
         self.apply_button.set_sensitive(bool(self.release and self.backup_folder
                                              and self.backup_device is not None and not self._busy))
 
+    def _refresh_fallbacks(self):
+        self._fallbacks = []
+        if not self.backup_folder or self.backup_device is None:
+            self.fallback_status.set_subtitle(
+                _("Choose a fallback folder to list verified snapshots by build number."))
+            self.fallback_button.set_sensitive(False)
+            return
+        try:
+            self._fallbacks = list_snapshots(self.backup_folder, expected_device=self.backup_device)
+            self.fallback_status.set_subtitle(
+                _("{count} complete, checksum-verified fallback set(s) found.").format(
+                    count=len(self._fallbacks)))
+            self.fallback_button.set_sensitive(bool(self._fallbacks) and not self._busy)
+        except Exception as error:
+            self.fallback_status.set_subtitle(str(error))
+            self.fallback_button.set_sensitive(False)
+
+    def _show_fallbacks(self, _button):
+        self._refresh_fallbacks()
+        if not self._fallbacks:
+            return
+        window = Adw.Window(transient_for=self.get_root(), modal=True,
+                           title=_("Choose a cached fallback build"))
+        window.set_default_size(520, min(620, 140 + 78 * len(self._fallbacks)))
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(Adw.HeaderBar())
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        note = Gtk.Label(
+            label=_("Only complete snapshots whose four images, kernel modules, and metadata pass checksum validation are shown."),
+            wrap=True, xalign=0,
+        )
+        note.set_margin_top(12)
+        note.set_margin_start(12)
+        note.set_margin_end(12)
+        content.append(note)
+        rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["boxed-list"])
+        rows.set_margin_start(12)
+        rows.set_margin_end(12)
+        rows.set_margin_bottom(12)
+        for snapshot in self._fallbacks:
+            row = Adw.ActionRow(
+                title=_("Build {number}").format(number=snapshot.build_number),
+                subtitle=_("Saved {date} · kernel {release}").format(
+                    date=snapshot.created_utc or _("date unavailable"),
+                    release=snapshot.source_kernel_release or _("unknown")),
+                activatable=True,
+            )
+            row.add_prefix(Gtk.Image(icon_name="drive-harddisk-symbolic"))
+            row.connect("activated", lambda _row, item=snapshot: (window.close(), self._confirm_restore(item)))
+            rows.append(row)
+        scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroll.set_child(rows)
+        content.append(scroll)
+        toolbar.set_content(content)
+        window.set_content(toolbar)
+        window.present()
+
+    def _confirm_restore(self, snapshot):
+        if not self.backup_folder or self.backup_device is None or self._busy:
+            return
+        body = _(
+            "Restore the four checksum-verified boot images and their matching kernel-module tree from build {number}? "
+            "Tab Companion will request administrator authentication, stage and revalidate the selected files, "
+            "write only boot, init_boot, vendor_boot and dtbo with read-back verification, and restore matching "
+            "modules under /usr/lib/modules. It does not write vbmeta, recovery, firmware, GPT or user data, and "
+            "does not reboot. Keep the fallback drive connected until the operation finishes."
+        ).format(number=snapshot.build_number)
+        dialog = Adw.AlertDialog(
+            heading=_("Restore X810 build {number}?").format(number=snapshot.build_number), body=body
+        )
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("restore", _("Restore boot set"))
+        dialog.set_response_appearance("restore", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _dialog, response:
+                       self._restore_snapshot(snapshot) if response == "restore" else None)
+        dialog.present(self.get_root())
+
+    def _restore_snapshot(self, snapshot):
+        if not self.backup_folder or self.backup_device is None or self._busy:
+            return
+        self._set_busy(True)
+        self._set_status(_("Restoring cached X810 boot set…"),
+                         _("Build {number} · no automatic reboot").format(number=snapshot.build_number))
+
+        def work():
+            try:
+                result = self._run_helper(
+                    ["pkexec", KERNEL_HELPER, "restore", "--backup-root", self.backup_folder,
+                     "--backup-device", str(self.backup_device), "--build-number", snapshot.build_number],
+                    _("Restoring cached boot images and matching modules…"),
+                )
+                outcome = (True, result)
+            except Exception as error:
+                outcome = (False, str(error))
+            GLib.idle_add(self._restore_completed, *outcome)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _restore_completed(self, success, detail):
+        self._set_busy(False)
+        if success:
+            self._set_status(
+                _("Fallback build restored and verified"),
+                _("Four boot partitions and matching kernel modules restored. No reboot was performed."),
+            )
+        else:
+            self._set_status(_("Fallback restore stopped"), detail, warning=True)
+        self._refresh_fallbacks()
+        return GLib.SOURCE_REMOVE
+
     def _set_busy(self, busy):
         self._busy = busy
         self.check_button.set_sensitive(not busy)
         self.folder_button.set_sensitive(not busy)
+        self._refresh_fallbacks()
         self._refresh_apply()
 
     def _set_status(self, title, subtitle="", warning=False):

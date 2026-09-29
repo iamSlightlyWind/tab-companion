@@ -29,6 +29,10 @@ validate it before use.
    as your normal user from the extracted directory (not as root).
 
 Launch **Tab Companion** from the app grid or run `tab-companion`.
+For a text-only updater (for example from a terminal without a usable desktop), run
+`tab-companion --tui`. It exposes only the app update, Linux port package update,
+and on X810 the kernel/boot update plus cached fallback restore. It uses the same
+checksum checks and polkit helpers as the GUI; it does not reboot automatically.
 
 ## Update
 
@@ -49,7 +53,7 @@ On Fedora SM-X810, **Updates** also includes **Kernel and boot images**. Choose
 a writable fallback directory before installing. Prefer a microSD or USB-OTG
 drive; Tab Companion saves the current `boot`, `init_boot`, `vendor_boot`,
 `dtbo` images and matching kernel modules under
-`<chosen-folder>/Tab Companion X810 Boot Backups/<build-id>/files/`, verifies
+`<chosen-folder>/<build-id>/files/`, verifies
 the snapshot, then installs the matching kernel RPM and writes/read-back-checks
 those four partitions. It does not reboot automatically and does not touch
 `vbmeta`, recovery, firmware, GPT, or user data. After a successful update it
@@ -60,6 +64,11 @@ begun, all four old images. It never reboots automatically. Each backup contains
 `READ-ME-TWRP.txt` and a module-restore script. Choose microSD/USB-OTG if
 possible, or copy the entire numbered folder somewhere TWRP can mount;
 TWRP may not be able to read Fedora's internal `linuxroot`.
+The GUI's **List and restore…** action (or the TUI's cached-fallback action)
+lists only numbered snapshots whose metadata and all recorded files pass
+integrity checks. Select a build number to restore its four boot images and
+matching kernel modules; the privileged helper revalidates the snapshot,
+requires authentication, reads back every partition write, and never reboots.
 
 ## Reinstall or roll back
 

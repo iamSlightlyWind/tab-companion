@@ -663,7 +663,7 @@ def _apply_locked(release_root, selected, manifest, build_number, assets, backup
     if (backup_record.get("kind") != BACKUP_KIND or backup_record.get("target_release_tag") != manifest["release_tag"]
             or backup_record.get("device") != EXPECTED_MODEL):
         raise ValueError("Fallback snapshot does not match this X810 update")
-        _verify_backup_files(backup_dir, backup_record)
+    _verify_backup_files(backup_dir, backup_record)
     live = _partition_hashes()
     saved = {name.removesuffix(".img"): info["sha256"]
              for name, info in backup_record["files"].items()}
@@ -761,6 +761,118 @@ def _apply_locked(release_root, selected, manifest, build_number, assets, backup
         shutil.rmtree(staged, ignore_errors=True)
 
 
+def restore_snapshot(backup_root, backup_device, build_number):
+    """Restore one verified, user-selected snapshot without rebooting.
+
+    The external snapshot is fully validated and copied to root-owned staging
+    before any partition write. Writes use the same fixed partition allowlist,
+    exact-size checks and read-back verification as normal updates. If a write
+    fails, the four current images are restored from staging.
+    """
+    if not re.fullmatch(r"[0-9]{1,20}", str(build_number)):
+        raise ValueError("Invalid fallback build number")
+    uid = _requesting_uid()
+    selected = check_real_directory(backup_root, "fallback folder")
+    root_info = selected.stat()
+    if root_info.st_dev != backup_device:
+        raise ValueError("Fallback drive is no longer mounted at the selected location")
+    if root_info.st_uid not in (uid, 0) or root_info.st_mode & 0o022:
+        raise ValueError("Fallback folder must be owned by the requesting user/root and not group/world-writable")
+    build_dir = selected / str(build_number)
+    if build_dir.is_symlink() or not build_dir.is_dir():
+        raise ValueError("Selected fallback build does not exist")
+    info = build_dir.lstat()
+    if info.st_uid not in (uid, 0) or info.st_mode & 0o022:
+        raise ValueError("Fallback snapshot directory has unsafe ownership or permissions")
+    metadata = build_dir / "backup.json"
+    if metadata.is_symlink() or not metadata.is_file():
+        raise ValueError("Fallback snapshot metadata is missing or unsafe")
+    metadata_info = metadata.lstat()
+    if metadata_info.st_uid not in (uid, 0) or not 1 <= metadata_info.st_size <= MAX_MANIFEST_BYTES:
+        raise ValueError("Fallback snapshot metadata has unsafe ownership or size")
+    record = json.loads(metadata.read_text(encoding="utf-8"))
+    if (record.get("schema_version") != 1 or record.get("kind") != BACKUP_KIND
+            or record.get("device") != EXPECTED_MODEL
+            or record.get("target_release_tag") != f"x810-fedora-port-build-{build_number}"):
+        raise ValueError("Fallback snapshot metadata does not match the selected X810 build")
+    _verify_backup_files(build_dir, record)
+
+    with _update_lock():
+        validate_tablet()
+        staging_root = STAGING_ROOT
+        staging_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        st = staging_root.lstat()
+        if not staging_root.is_dir() or staging_root.is_symlink() or st.st_uid != ROOT_UID or st.st_mode & 0o022:
+            raise ValueError("Unsafe root-owned kernel-update staging directory")
+        needed = (2 * sum(PARTITIONS[name][1] for name in PARTITIONS)
+                  + record["module_backup"]["size_bytes"] + 32 * 1024 * 1024)
+        if shutil.disk_usage(staging_root).free < needed:
+            raise ValueError("Not enough protected staging space for restore and rollback images")
+        staged = pathlib.Path(tempfile.mkdtemp(prefix="restore-", dir=staging_root))
+        try:
+            for image_name in IMAGES:
+                source = build_dir / "files" / image_name
+                destination = staged / image_name
+                with source.open("rb", buffering=0) as input_file, destination.open("xb", buffering=0) as output_file:
+                    shutil.copyfileobj(input_file, output_file, length=4 * 1024 * 1024)
+                    output_file.flush()
+                    os.fsync(output_file.fileno())
+                expected = record["files"][image_name]["sha256"]
+                if destination.stat().st_size != IMAGES[image_name] or sha256_file(destination) != expected:
+                    raise ValueError(f"Fallback {image_name} changed while staging")
+                current = staged / ("current-" + image_name)
+                device, size = _partition_path_safe(image_name[:-4])
+                with open(device, "rb", buffering=0) as input_file, current.open("xb", buffering=0) as output_file:
+                    shutil.copyfileobj(input_file, output_file, length=4 * 1024 * 1024)
+                    output_file.flush()
+                    os.fsync(output_file.fileno())
+                if current.stat().st_size != size:
+                    raise ValueError(f"Could not stage current {image_name} for rollback")
+
+            # Keep the selected module archive in protected storage before the
+            # external drive can be removed or changed.
+            module = record["module_backup"]
+            module_source = build_dir / "files" / module["archive"]
+            module_dest = staged / module["archive"]
+            shutil.copyfile(module_source, module_dest)
+            if sha256_file(module_dest) != module["sha256"]:
+                raise ValueError("Fallback kernel-module archive changed while staging")
+            _verify_module_archive(module_dest, module["release"])
+            staged_build = staged / "verified-snapshot"
+            staged_build.mkdir()
+            files_dir = staged_build / "files"
+            files_dir.mkdir()
+            for image_name in IMAGES:
+                os.replace(staged / image_name, files_dir / image_name)
+            os.replace(module_dest, files_dir / module["archive"])
+            staged_record = dict(record)
+            staged_record["files"] = dict(record["files"])
+            _write_started = False
+            try:
+                for image_name in IMAGES:
+                    part = image_name[:-4]
+                    _write_started = True
+                    _write_image(part, files_dir / image_name, record["files"][image_name]["sha256"])
+                _restore_modules(staged_build, staged_record)
+            except Exception as restore_error:
+                rollback_errors = []
+                if _write_started:
+                    for part in PARTITIONS:
+                        image_name = part + ".img"
+                        try:
+                            _write_image(part, staged / ("current-" + image_name),
+                                         sha256_file(staged / ("current-" + image_name)))
+                        except Exception as rollback_error:
+                            rollback_errors.append(f"{part}: {rollback_error}")
+                if rollback_errors:
+                    raise RuntimeError("Fallback restore failed and current boot-set rollback was incomplete: "
+                                       + "; ".join(rollback_errors) + ". Do NOT reboot.") from restore_error
+                raise RuntimeError(f"Fallback restore failed; current boot images were restored: {restore_error}. Do NOT reboot.") from restore_error
+            emit("done", f"X810 fallback build {build_number} restored and verified. Tablet was NOT rebooted.")
+        finally:
+            shutil.rmtree(staged, ignore_errors=True)
+
+
 class _UpdateLock:
     def __enter__(self):
         path = "/run/lock/tab-companion-x810-kernel-update.lock"
@@ -789,12 +901,19 @@ def main(argv=None):
     command.add_argument("--release-dir", required=True)
     command.add_argument("--backup-root", required=True)
     command.add_argument("--backup-device", required=True, type=int)
+    restore = sub.add_parser("restore")
+    restore.add_argument("--backup-root", required=True)
+    restore.add_argument("--backup-device", required=True, type=int)
+    restore.add_argument("--build-number", required=True)
     args = parser.parse_args(argv)
     if os.geteuid() != 0:
         emit("error", "This operation must run through polkit")
         return 1
     try:
-        apply(args.release_dir, args.backup_root, args.backup_device)
+        if args.command == "apply":
+            apply(args.release_dir, args.backup_root, args.backup_device)
+        else:
+            restore_snapshot(args.backup_root, args.backup_device, args.build_number)
     except Exception as error:
         emit("error", str(error))
         return 1

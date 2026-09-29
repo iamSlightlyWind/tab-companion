@@ -135,6 +135,20 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Refusing to overwrite an existing backup"):
             self._make_backup(manifest, "102")
 
+    def test_apply_revalidates_all_existing_snapshot_hashes_before_writing(self):
+        release_dir, manifest, assets = self._release("103")
+        backup_dir = self._make_backup(manifest, "103")
+        image = backup_dir / "files" / "boot.img"
+        image.write_bytes(b"modified fallback".ljust(128, b"?"))
+        with patch.object(core, "_requesting_uid", return_value=os.getuid()), \
+             patch.object(core, "_partition_path_safe", side_effect=lambda name: core.PARTITIONS[name]), \
+             patch.object(core, "STAGING_ROOT", self.root / "stage"), \
+             patch.object(core, "ROOT_UID", os.getuid()), \
+             patch.object(core, "_update_lock", return_value=nullcontext()):
+            with self.assertRaisesRegex(ValueError, "snapshot is damaged"):
+                core._apply_locked(release_dir, self.selected, manifest, "103", assets,
+                                   backup_dir, self.selected.stat().st_dev)
+
     def test_retention_prunes_only_owned_verified_snapshots_to_five(self):
         for build in range(100, 106):
             _release, manifest, _assets = self._release(str(build))
@@ -148,6 +162,81 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
         (user_dir / "keep.txt").write_text("unrelated user data")
         core._prune_backups(self.selected, keep=5)
         self.assertEqual((user_dir / "keep.txt").read_text(), "unrelated user data")
+
+    def test_restore_snapshot_revalidates_then_restores_images_and_matching_modules(self):
+        _release, manifest, _assets = self._release("301")
+        snapshot = self._make_backup(manifest, "301")
+        expected = {name: Path(device).read_bytes() for name, (device, _size) in core.PARTITIONS.items()}
+        for name, (device, _size) in core.PARTITIONS.items():
+            Path(device).write_bytes((b"changed-" + name.encode()).ljust(128, b"!"))
+        module_file = core.MODULES_ROOT / os.uname().release / "sample.ko"
+        module_file.write_bytes(b"different running module")
+        staging = self.root / "restore-staging"
+        staging.mkdir()
+        with patch.object(core, "_requesting_uid", return_value=os.getuid()), \
+             patch.object(core, "validate_tablet"), \
+             patch.object(core, "_partition_path_safe", side_effect=lambda name: core.PARTITIONS[name]), \
+             patch.object(core, "STAGING_ROOT", staging), \
+             patch.object(core, "ROOT_UID", os.getuid()), \
+             patch.object(core, "_update_lock", return_value=nullcontext()):
+            core.restore_snapshot(str(self.selected), self.selected.stat().st_dev, "301")
+        for name, (device, _size) in core.PARTITIONS.items():
+            self.assertEqual(Path(device).read_bytes(), expected[name])
+        self.assertEqual(module_file.read_bytes(), b"old known-good module")
+
+    def test_failed_snapshot_write_rolls_back_current_images_and_does_not_reboot(self):
+        _release, manifest, _assets = self._release("304")
+        self._make_backup(manifest, "304")
+        for name, (device, _size) in core.PARTITIONS.items():
+            Path(device).write_bytes((b"live-" + name.encode()).ljust(128, b"!"))
+        expected_live = {name: Path(device).read_bytes()
+                         for name, (device, _size) in core.PARTITIONS.items()}
+        staging = self.root / "rollback-staging"
+        staging.mkdir()
+        real_write = core._write_image
+        failed = {"once": False}
+
+        def fail_once(name, source, digest):
+            if name == "init_boot" and "verified-snapshot" in source.parts and not failed["once"]:
+                failed["once"] = True
+                raise OSError("simulated image-write error")
+            return real_write(name, source, digest)
+
+        with patch.object(core, "_requesting_uid", return_value=os.getuid()), \
+             patch.object(core, "validate_tablet"), \
+             patch.object(core, "_partition_path_safe", side_effect=lambda name: core.PARTITIONS[name]), \
+             patch.object(core, "_write_image", side_effect=fail_once), \
+             patch.object(core, "STAGING_ROOT", staging), \
+             patch.object(core, "ROOT_UID", os.getuid()), \
+             patch.object(core, "_update_lock", return_value=nullcontext()):
+            with self.assertRaisesRegex(RuntimeError, "current boot images were restored"):
+                core.restore_snapshot(str(self.selected), self.selected.stat().st_dev, "304")
+        for name, (device, _size) in core.PARTITIONS.items():
+            self.assertEqual(Path(device).read_bytes(), expected_live[name])
+
+    def test_restore_rejects_mismatched_build_and_bad_snapshot_before_writing(self):
+        _release, manifest, _assets = self._release("302")
+        snapshot = self._make_backup(manifest, "302")
+        device = Path(core.PARTITIONS["boot"][0])
+        before = device.read_bytes()
+        with patch.object(core, "_requesting_uid", return_value=os.getuid()):
+            with self.assertRaisesRegex(ValueError, "does not exist"):
+                core.restore_snapshot(str(self.selected), self.selected.stat().st_dev, "303")
+        metadata = snapshot / "backup.json"
+        record = json.loads(metadata.read_text())
+        record["target_release_tag"] = "x810-fedora-port-build-999"
+        metadata.write_text(json.dumps(record))
+        with patch.object(core, "_requesting_uid", return_value=os.getuid()):
+            with self.assertRaisesRegex(ValueError, "does not match the selected"):
+                core.restore_snapshot(str(self.selected), self.selected.stat().st_dev, "302")
+        record["target_release_tag"] = "x810-fedora-port-build-302"
+        metadata.write_text(json.dumps(record))
+        image = snapshot / "files" / "boot.img"
+        image.write_bytes(b"tampered".ljust(128, b"?"))
+        with patch.object(core, "_requesting_uid", return_value=os.getuid()):
+            with self.assertRaisesRegex(ValueError, "snapshot is damaged"):
+                core.restore_snapshot(str(self.selected), self.selected.stat().st_dev, "302")
+        self.assertEqual(device.read_bytes(), before)
 
     def _prepare_apply(self, build="201"):
         release_dir, manifest, assets = self._release(build)
