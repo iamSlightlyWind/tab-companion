@@ -1,0 +1,39 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Set the next-boot zram-generator size using an allowlisted MiB value."""
+
+import os
+import sys
+import tempfile
+
+sys.path.insert(0, "/usr/lib/tab-companion")
+from tab_companion.zram import CONFIG_DIR, CONFIG_FILE, render_config  # noqa: E402
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 1:
+        print("Usage: tab-companion-zram-size <MiB>", file=sys.stderr)
+        return 2
+    try:
+        contents = render_config(argv[0])
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    CONFIG_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".90-tab-companion.", dir=CONFIG_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(contents)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, CONFIG_FILE)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print(f"Configured {argv[0]} MiB zram; reboot to apply.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

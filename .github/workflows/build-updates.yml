@@ -54,6 +54,8 @@ jobs:
           sudo apt-get install --yes dpkg-dev python3
 
       - name: Run tests
+        env:
+          PYTHONPATH: src
         run: python3 -m unittest discover -s tests -v
 
       - name: Build Ubuntu DEB
@@ -97,6 +99,8 @@ jobs:
           sudo apt-get install --yes python3 rpm
 
       - name: Run tests
+        env:
+          PYTHONPATH: src
         run: python3 -m unittest discover -s tests -v
 
       - name: Prepare Fedora DNF cache mount

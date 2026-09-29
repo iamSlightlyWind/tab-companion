@@ -41,6 +41,14 @@ class AdminAuthTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid boot-switch"):
             helper.validate("boot-switch", ["../../etc/passwd"])
 
+    def test_zram_dispatch_is_fixed_and_accepts_only_allowlisted_sizes(self):
+        path, args = helper.validate("zram-size", ["6144"])
+        self.assertEqual(path, "/usr/libexec/tab-companion-zram-size")
+        self.assertEqual(args, ["6144"])
+        for args in ([], ["4096", ";id"], ["4097"]):
+            with self.subTest(args=args), self.assertRaisesRegex(ValueError, "Invalid zram-size"):
+                helper.validate("zram-size", args)
+
     def test_shared_policy_keeps_one_authenticated_session_for_all_operations(self):
         policy = POLICY.read_text(encoding="utf-8")
         self.assertIn("<allow_active>auth_admin_keep</allow_active>", policy)

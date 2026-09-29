@@ -13,10 +13,12 @@ from gi.repository import Adw, Gio, GLib, Gtk
 
 from .admin_auth import command as admin_command
 from .i18n import _
+from .zram import SIZES_MIB, active_size_bytes, parse_configured_size
 
 
 BUSCTL = "/usr/bin/busctl"
 HELPER = "/usr/libexec/tab-companion-power-profile"
+ZRAM_HELPER = "/usr/libexec/tab-companion-zram-size"
 SERVICE = "net.hadess.PowerProfiles"
 OBJECT = "/net/hadess/PowerProfiles"
 INTERFACE = "net.hadess.PowerProfiles"
@@ -68,6 +70,24 @@ class PowerProfilesPage(Adw.PreferencesPage):
         refresh.connect("clicked", lambda *_args: self.refresh())
         self.status_row.add_suffix(refresh)
         self.add(group)
+
+        self.zram_row = None
+        self.zram_status_row = None
+        if __import__("os").path.isfile(ZRAM_HELPER):
+            zram_group = Adw.PreferencesGroup(
+                title=_("Memory compression"),
+                description=_("Choose the maximum compressed swap size. The change takes effect after reboot."),
+            )
+            self.zram_row = Adw.ComboRow(
+                title=_("ZRAM size"),
+                model=Gtk.StringList.new([f"{size // 1024} GiB" if size % 1024 == 0
+                                          else f"{size / 1024:g} GiB" for size in SIZES_MIB]),
+            )
+            self.zram_row.connect("notify::selected", self._zram_changed)
+            zram_group.add(self.zram_row)
+            self.zram_status_row = Adw.ActionRow(title=_("ZRAM status"))
+            zram_group.add(self.zram_status_row)
+            self.add(zram_group)
         self.refresh()
 
     def _read_active(self):
@@ -89,12 +109,73 @@ class PowerProfilesPage(Adw.PreferencesPage):
             self.mode_row.set_sensitive(False)
             self.status_row.set_subtitle(_("Power profile service is unavailable."))
             self._updating = False
+            self._refresh_zram()
             return
         self._active = profile
         self.mode_row.set_selected(PROFILE_INDEX[profile])
         self.mode_row.set_sensitive(True)
         self.status_row.set_subtitle(dict(PROFILES)[profile])
         self._updating = False
+        self._refresh_zram()
+
+    def _refresh_zram(self):
+        if self.zram_row is None:
+            return
+        configured = parse_configured_size()
+        self._zram_configured = configured
+        self._updating = True
+        self.zram_row.set_selected(SIZES_MIB.index(configured))
+        self._updating = False
+        active = active_size_bytes()
+        if active is None:
+            self.zram_status_row.set_subtitle(
+                _("Configured for next boot; active zram device is not present.")
+            )
+        else:
+            active_gib = active / (1024 ** 3)
+            self.zram_status_row.set_subtitle(
+                _("Active now: {size:.1f} GiB. A new setting applies after reboot.").format(size=active_gib)
+            )
+
+    def _zram_changed(self, row, _param):
+        if self._updating or self.zram_row is None:
+            return
+        selected = row.get_selected()
+        if selected >= len(SIZES_MIB):
+            return
+        size = SIZES_MIB[selected]
+        if size == getattr(self, "_zram_configured", None):
+            return
+        row.set_sensitive(False)
+        self.zram_status_row.set_subtitle(_("Authorizing zram setting…"))
+        try:
+            self._zram_process = Gio.Subprocess.new(
+                admin_command("zram-size", ZRAM_HELPER, str(size)),
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+            )
+            self._zram_process.communicate_utf8_async(None, None, self._zram_finished, size)
+        except (GLib.Error, OSError):
+            self._zram_failed()
+
+    def _zram_finished(self, process, result, size):
+        try:
+            _stdout, _stderr = process.communicate_utf8_finish(result)
+        except (GLib.Error, TypeError):
+            self._zram_failed()
+            return
+        if not process.get_successful():
+            self._zram_failed()
+            return
+        self._zram_configured = size
+        self.zram_row.set_sensitive(True)
+        self._refresh_zram()
+
+    def _zram_failed(self):
+        self._updating = True
+        self.zram_row.set_selected(SIZES_MIB.index(getattr(self, "_zram_configured", 4096)))
+        self._updating = False
+        self.zram_row.set_sensitive(True)
+        self.zram_status_row.set_subtitle(_("Change cancelled or unavailable; previous setting remains."))
 
     def _mode_changed(self, row, _param):
         if self._updating:

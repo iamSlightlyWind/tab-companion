@@ -13,6 +13,7 @@ HELPERS = {
     "install-package": "/usr/libexec/tab-companion-install-package",
     "kernel-update": "/usr/local/libexec/tab-companion-kernel-update",
     "power-profile": "/usr/libexec/tab-companion-power-profile",
+    "zram-size": "/usr/libexec/tab-companion-zram-size",
     "keyboard-recover": "/usr/libexec/tab-companion-keyboard-recover",
     "keyboard-diagnostics": "/usr/libexec/tab-companion-keyboard-diagnostics",
 }
@@ -43,6 +44,8 @@ def validate(operation: str, args: list[str]) -> tuple[str, list[str]]:
         raise ValueError("Invalid kernel-update request")
     if operation == "power-profile" and (len(args) != 1 or args[0] not in PROFILE_IDS):
         raise ValueError("Invalid power-profile request")
+    if operation == "zram-size" and (len(args) != 1 or args[0] not in {"1024", "2048", "3072", "4096", "6144", "8192"}):
+        raise ValueError("Invalid zram-size request")
     if operation == "keyboard-diagnostics" and args not in ([], ["--record-keys"]):
         raise ValueError("Invalid keyboard-diagnostics request")
     # Package/kernel helpers apply their own detailed path, checksum, model,
