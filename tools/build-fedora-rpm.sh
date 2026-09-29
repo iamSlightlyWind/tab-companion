@@ -68,12 +68,11 @@ else
     exit 2
 fi
 
-rpm_name=$(find "$out" -maxdepth 1 -type f -name "tab-companion-*.${dist#*.}.noarch.rpm" \
-    -printf '%f\n' | sort -V | tail -n1)
+rpm_name="tab-companion-${base_version}-${build_release}.${run_number}${dist}.noarch.rpm"
 rpm_file="$out/$rpm_name"
-if [[ -z "$rpm_name" ]]; then
-    echo "Built RPM could not be found in $out" >&2
+if [[ ! -f "$rpm_file" ]]; then
+    echo "Expected RPM $rpm_name was not produced in $out" >&2
     exit 1
 fi
-(cd "$out" && sha256sum "$(basename "$rpm_file")" > "$(basename "$rpm_file").sha256")
+(cd "$out" && sha256sum "$rpm_name" > "$rpm_name.sha256")
 echo "Built $rpm_file"
