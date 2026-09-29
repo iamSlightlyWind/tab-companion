@@ -49,6 +49,7 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
         self.original_partitions = core.PARTITIONS
         self.original_images = core.IMAGES
         self.original_modules_root = core.MODULES_ROOT
+        self.original_boot_sets_root = core.BOOT_SETS_ROOT
         core.PARTITIONS = {}
         for name in ("boot", "init_boot", "vendor_boot", "dtbo"):
             device = self.devices_dir / name
@@ -56,12 +57,14 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
             core.PARTITIONS[name] = (str(device), 128)
         core.IMAGES = {name + ".img": 128 for name in core.PARTITIONS}
         core.MODULES_ROOT = self.root / "usr-lib-modules"
+        core.BOOT_SETS_ROOT = self.root / "boot-sets"
         current_modules = core.MODULES_ROOT / os.uname().release
         current_modules.mkdir(parents=True)
         (current_modules / "sample.ko").write_bytes(b"old known-good module")
         self.addCleanup(setattr, core, "PARTITIONS", self.original_partitions)
         self.addCleanup(setattr, core, "IMAGES", self.original_images)
         self.addCleanup(setattr, core, "MODULES_ROOT", self.original_modules_root)
+        self.addCleanup(setattr, core, "BOOT_SETS_ROOT", self.original_boot_sets_root)
 
     @staticmethod
     def _digest(data):
@@ -187,6 +190,7 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
             core.restore_snapshot(str(self.selected), self.selected.stat().st_dev, "301")
         for name, (device, _size) in core.PARTITIONS.items():
             self.assertEqual(Path(device).read_bytes(), expected[name])
+            self.assertEqual((core.BOOT_SETS_ROOT / "fedora" / (name + ".img")).read_bytes(), expected[name])
         self.assertEqual(module_file.read_bytes(), b"old known-good module")
 
     def test_failed_snapshot_write_rolls_back_current_images_and_does_not_reboot(self):
@@ -256,6 +260,7 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
              patch.object(core, "_install_x810_rpm", side_effect=install), \
              patch.object(core, "_partition_path_safe", side_effect=lambda name: core.PARTITIONS[name]), \
              patch.object(core, "STAGING_ROOT", stage), \
+             patch.object(core, "BOOT_SETS_ROOT", self.root / "boot-sets"), \
              patch.object(core, "ROOT_UID", os.getuid()), \
              patch.object(core, "_update_lock", return_value=nullcontext()), \
              patch.object(core, "_write_image", side_effect=write_image or original_write):
@@ -269,10 +274,16 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
         self._apply_images(release_dir, self.selected, backup_dir, stage)
         for name, (device, _size) in core.PARTITIONS.items():
             self.assertEqual(Path(device).read_bytes(), (release_dir / (name + ".img")).read_bytes())
+            self.assertEqual((core.BOOT_SETS_ROOT / "fedora" / (name + ".img")).read_bytes(),
+                             (release_dir / (name + ".img")).read_bytes())
+        self.assertEqual((core.BOOT_SETS_ROOT / "fedora" / "name.txt").read_text(), "Fedora\n")
 
     def test_failed_partition_write_restores_all_four_known_good_images(self):
         release_dir, manifest, assets, backup_dir, stage = self._prepare_apply("202")
         self._candidate_data = (manifest, "202", assets)
+        old_set = core.BOOT_SETS_ROOT / "fedora"
+        old_set.mkdir(parents=True)
+        (old_set / "boot.img").write_bytes(b"previous staged Fedora set")
         original = {name: Path(device).read_bytes() for name, (device, _size) in core.PARTITIONS.items()}
         (core.MODULES_ROOT / os.uname().release / "sample.ko").write_bytes(b"new RPM module tree")
         real_write = core._write_image
@@ -288,6 +299,7 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
             self._apply_images(release_dir, self.selected, backup_dir, stage, write_image=fail_once)
         for name, (device, _size) in core.PARTITIONS.items():
             self.assertEqual(Path(device).read_bytes(), original[name])
+        self.assertEqual((old_set / "boot.img").read_bytes(), b"previous staged Fedora set")
         restored_module = core.MODULES_ROOT / os.uname().release / "sample.ko"
         self.assertEqual(restored_module.read_bytes(), b"old known-good module")
 

@@ -30,6 +30,7 @@ EXPECTED_MODEL = "SM-X810"
 EXPECTED_COMPATIBLE = "samsung,gts9pwifi"
 BACKUP_KIND = "tab-companion-x810-boot-backup"
 STAGING_ROOT = pathlib.Path("/var/cache/tab-companion/x810-kernel-update")
+BOOT_SETS_ROOT = pathlib.Path("/var/lib/x810-boot-sets")
 MODULES_ROOT = pathlib.Path("/usr/lib/modules")
 ROOT_UID = 0
 BUILD_TAG = re.compile(r"^x810-fedora-port-build-([0-9]{1,20})$")
@@ -613,6 +614,76 @@ def _write_image(name, source_path, expected_hash):
     emit("step", f"{name}: written and read-back verified")
 
 
+def _prepare_fedora_boot_set(staged, assets):
+    """Build a verified Fedora boot-set directory before touching live partitions.
+
+    Android's dual-boot app reads the Fedora images from linuxroot. Keeping that
+    staged set in step with the kernel RPM/raw boot update is essential: otherwise
+    switching Android -> Fedora silently puts the old kernel back on the tablet.
+    Copy the verified release payload, not the raw live partitions: Fedora's
+    boot-time Bluetooth-address and memory-reclaim services intentionally patch
+    DTB fields in live boot/vendor_boot, so those live hashes differ from the
+    reproducible base images and must not become the switcher's source set.
+    The prepared directory is private, same-filesystem staging and is not visible
+    to the switcher until _promote_fedora_boot_set() atomically publishes it.
+    """
+    root = BOOT_SETS_ROOT
+    root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    info = root.lstat()
+    if root.is_symlink() or not root.is_dir() or info.st_uid != ROOT_UID or info.st_mode & 0o022:
+        raise ValueError(f"Unsafe Fedora boot-set root: {root}")
+    destination = root / "fedora"
+    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
+        raise ValueError(f"Unsafe existing Fedora boot-set destination: {destination}")
+    prepared = pathlib.Path(tempfile.mkdtemp(prefix=".fedora-update-", dir=root))
+    try:
+        for name in IMAGES:
+            source = staged / name
+            target = prepared / name
+            record = assets[name]
+            with source.open("rb", buffering=0) as input_file, target.open("xb", buffering=0) as output_file:
+                shutil.copyfileobj(input_file, output_file, length=4 * 1024 * 1024)
+                output_file.flush()
+                os.fsync(output_file.fileno())
+            if (target.stat().st_size != record["size_bytes"]
+                    or sha256_file(target) != record["sha256"]):
+                raise ValueError(f"Prepared Fedora boot-set image failed verification: {name}")
+            os.chmod(target, 0o644)
+        name_file = prepared / "name.txt"
+        name_file.write_text("Fedora\n", encoding="utf-8")
+        os.chmod(name_file, 0o644)
+        _fsync_directory(prepared)
+        return prepared
+    except Exception:
+        shutil.rmtree(prepared, ignore_errors=True)
+        raise
+
+
+def _promote_fedora_boot_set(prepared):
+    """Atomically replace the dual-boot Fedora set, restoring old on error."""
+    root = BOOT_SETS_ROOT
+    destination = root / "fedora"
+    previous = None
+    if destination.exists():
+        previous = pathlib.Path(tempfile.mkdtemp(prefix=".fedora-previous-", dir=root))
+        previous.rmdir()
+        os.rename(destination, previous)
+    try:
+        os.rename(prepared, destination)
+        _fsync_directory(root)
+    except Exception:
+        if previous is not None and previous.exists() and not destination.exists():
+            os.rename(previous, destination)
+            _fsync_directory(root)
+        raise
+    if previous is not None:
+        try:
+            shutil.rmtree(previous)
+            _fsync_directory(root)
+        except OSError as error:
+            emit("warning", f"New Fedora boot set is active; could not remove old set {previous}: {error}")
+
+
 def _prune_backups(container, keep=5):
     snapshots = []
     for entry in container.iterdir():
@@ -683,6 +754,7 @@ def _apply_locked(release_root, selected, manifest, build_number, assets, backup
     if shutil.disk_usage(staging_root).free < required_stage_bytes:
         raise ValueError("Not enough free space in the protected staging area for verified update and rollback copies")
     staged = pathlib.Path(tempfile.mkdtemp(prefix="apply-", dir=staging_root))
+    prepared_boot_set = None
     try:
         for name in IMAGES:
             src = release_root / name
@@ -693,6 +765,7 @@ def _apply_locked(release_root, selected, manifest, build_number, assets, backup
                 os.fsync(output_file.fileno())
             if dst.stat().st_size != assets[name]["size_bytes"] or sha256_file(dst) != assets[name]["sha256"]:
                 raise ValueError(f"{name} changed during privileged staging")
+        prepared_boot_set = _prepare_fedora_boot_set(staged, assets)
         for image_name in IMAGES:
             src = backup_dir / "files" / image_name
             dst = staged / ("old-" + image_name)
@@ -726,6 +799,8 @@ def _apply_locked(release_root, selected, manifest, build_number, assets, backup
                     raise ValueError("Fallback drive disconnected during update; stopping and restoring")
                 write_started = True
                 _write_image(part, staged / image_name, assets[image_name]["sha256"])
+            _promote_fedora_boot_set(prepared_boot_set)
+            prepared_boot_set = None
         except Exception as update_error:
             if write_started:
                 emit("error", f"Update write failed ({update_error}); restoring the saved boot set…")
@@ -757,8 +832,10 @@ def _apply_locked(release_root, selected, manifest, build_number, assets, backup
             _prune_backups(selected, keep=5)
         except Exception as prune_error:
             emit("warning", f"Update succeeded, but old-backup cleanup was skipped: {prune_error}")
-        emit("done", f"X810 boot set updated and verified. Fallback saved at {backup_dir}; tablet was NOT rebooted.")
+        emit("done", f"X810 boot images updated; Fedora dual-boot set synchronized. Fallback saved at {backup_dir}; tablet was NOT rebooted.")
     finally:
+        if prepared_boot_set is not None:
+            shutil.rmtree(prepared_boot_set, ignore_errors=True)
         shutil.rmtree(staged, ignore_errors=True)
 
 
@@ -810,6 +887,7 @@ def restore_snapshot(backup_root, backup_device, build_number):
         if shutil.disk_usage(staging_root).free < needed:
             raise ValueError("Not enough protected staging space for restore and rollback images")
         staged = pathlib.Path(tempfile.mkdtemp(prefix="restore-", dir=staging_root))
+        prepared_boot_set = None
         try:
             for image_name in IMAGES:
                 source = build_dir / "files" / image_name
@@ -846,6 +924,7 @@ def restore_snapshot(backup_root, backup_device, build_number):
             for image_name in IMAGES:
                 os.replace(staged / image_name, files_dir / image_name)
             os.replace(module_dest, files_dir / module["archive"])
+            prepared_boot_set = _prepare_fedora_boot_set(files_dir, record["files"])
             staged_record = dict(record)
             staged_record["files"] = dict(record["files"])
             _write_started = False
@@ -869,8 +948,18 @@ def restore_snapshot(backup_root, backup_device, build_number):
                     raise RuntimeError("Fallback restore failed and current boot-set rollback was incomplete: "
                                        + "; ".join(rollback_errors) + ". Do NOT reboot.") from restore_error
                 raise RuntimeError(f"Fallback restore failed; current boot images were restored: {restore_error}. Do NOT reboot.") from restore_error
-            emit("done", f"X810 fallback build {build_number} restored and verified. Tablet was NOT rebooted.")
+            try:
+                _promote_fedora_boot_set(prepared_boot_set)
+                prepared_boot_set = None
+            except Exception as set_error:
+                raise RuntimeError(
+                    "Fallback images and matching modules were restored, but the Fedora dual-boot set could not "
+                    f"be refreshed ({set_error}). Do NOT use Android's switch-to-Fedora action until the set is repaired."
+                ) from set_error
+            emit("done", f"X810 fallback build {build_number} restored; Fedora dual-boot set synchronized. Tablet was NOT rebooted.")
         finally:
+            if prepared_boot_set is not None:
+                shutil.rmtree(prepared_boot_set, ignore_errors=True)
             shutil.rmtree(staged, ignore_errors=True)
 
 
