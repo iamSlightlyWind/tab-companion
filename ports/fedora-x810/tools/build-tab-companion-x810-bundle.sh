@@ -28,6 +28,8 @@ install -m 0755 tools/tab-companion-power-profile \
     "$stage/usr/libexec/tab-companion-power-profile"
 install -m 0755 usr/libexec/tab-companion-zram-size \
     "$stage/usr/libexec/tab-companion-zram-size"
+install -m 0755 usr/libexec/tab-companion-swap-priority \
+    "$stage/usr/libexec/tab-companion-swap-priority"
 install -m 0644 packaging/io.github.agcarbajo.TabCompanion.X810.policy \
     "$stage/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.X810.policy"
 install -m 0644 packaging/tab-companion-x810/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.PowerProfile.policy \

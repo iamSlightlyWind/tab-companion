@@ -29,3 +29,15 @@ class UiLabelTests(unittest.TestCase):
     def test_app_and_port_update_buttons_do_not_fill_tall_rows(self):
         source = (ROOT / "src/tab_companion/updates_page.py").read_text(encoding="utf-8")
         self.assertGreaterEqual(source.count("valign=Gtk.Align.CENTER, vexpand=False"), 3)
+
+    def test_swap_priority_spin_buttons_do_not_stretch_to_action_row_height(self):
+        source = (ROOT / "src/tab_companion/power_profiles_page.py").read_text(encoding="utf-8")
+        self.assertIn("spin.set_valign(Gtk.Align.CENTER)", source)
+        self.assertIn("spin.set_vexpand(False)", source)
+
+    def test_zram_size_controls_do_not_stretch_vertically(self):
+        source = (ROOT / "src/tab_companion/power_profiles_page.py").read_text(encoding="utf-8")
+        self.assertIn("self.zram_scale.set_valign(Gtk.Align.CENTER)", source)
+        self.assertIn("self.zram_scale.set_vexpand(False)", source)
+        self.assertIn("self.zram_editor.set_valign(Gtk.Align.CENTER)", source)
+        self.assertIn("zram_controls.set_vexpand(False)", source)

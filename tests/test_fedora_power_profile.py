@@ -32,6 +32,13 @@ class FedoraPowerProfileTests(unittest.TestCase):
     def test_bundle_installs_allowlisted_helper_and_its_polkit_action(self):
         build = (ROOT / "ports/fedora-x810/tools/build-tab-companion-x810-bundle.sh").read_text()
         self.assertIn("tools/tab-companion-power-profile", build)
+
+    def test_bundle_installs_swap_priority_helper_and_dispatches_it(self):
+        build = (ROOT / "ports/fedora-x810/tools/build-tab-companion-x810-bundle.sh").read_text(encoding="utf-8")
+        dispatcher = (ROOT / "ports/fedora-x810/usr/libexec/tab-companion-admin").read_text(encoding="utf-8")
+        self.assertIn("tab-companion-swap-priority", build)
+        self.assertIn('"swap-priority": "/usr/libexec/tab-companion-swap-priority"', dispatcher)
+        self.assertIn("swap-priority", (ROOT / "src/tab_companion/power_profiles_page.py").read_text(encoding="utf-8"))
         self.assertIn("TabCompanion.PowerProfile.policy", build)
         policy = ROOT / "ports/fedora-x810/packaging/tab-companion-x810/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.PowerProfile.policy"
         self.assertTrue(policy.is_file())

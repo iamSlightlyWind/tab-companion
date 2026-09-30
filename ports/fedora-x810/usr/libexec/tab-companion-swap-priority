@@ -1,0 +1,190 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Persist per-device swap priorities without disrupting active swap."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, "/usr/lib/tab-companion")
+from tab_companion.swap_priority import active_swaps  # noqa: E402
+
+FSTAB = Path("/etc/fstab")
+ZRAM_PRIORITY = Path("/etc/systemd/zram-generator.conf.d/91-tab-companion-swap-priority.conf")
+SYSTEMD_DIR = Path("/etc/systemd/system")
+
+
+def _canonical(source: str) -> str:
+    source = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), source)
+    if source.startswith(("UUID=", "LABEL=", "PARTUUID=", "PARTLABEL=")):
+        try:
+            result = subprocess.run(
+                ["/usr/bin/findfs", source], check=True, capture_output=True,
+                text=True, timeout=3,
+            )
+            return os.path.realpath(result.stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            return source
+    return os.path.realpath(source)
+
+
+def _same_source(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    a, b = _canonical(left), _canonical(right)
+    if a == b:
+        return True
+    try:
+        sa, sb = os.stat(a), os.stat(b)
+        return sa.st_rdev == sb.st_rdev and sa.st_rdev != 0
+    except OSError:
+        return False
+
+
+def _fstab_records(text: str) -> list[tuple[int, str, list[str], str]]:
+    records = []
+    for number, line in enumerate(text.splitlines(), 1):
+        fields = line.split("#", 1)[0].split()
+        if len(fields) >= 4 and fields[2] == "swap":
+            records.append((number, fields[0], fields, line))
+    return records
+
+
+def _set_fstab_priority(text: str, source: str, priority: int) -> str | None:
+    lines = text.splitlines()
+    matches = [
+        index for index, line in enumerate(lines)
+        if any(_same_source(fields[0], source) for _num, _src, fields, original in _fstab_records(line))
+    ]
+    if len(matches) > 1:
+        raise ValueError(f"Multiple /etc/fstab swap entries match {source}")
+    if not matches:
+        return None
+    index = matches[0]
+    line = lines[index]
+    comment = ""
+    # Retain a trailing comment while replacing only the option tokens.
+    if "#" in line:
+        before, after = line.split("#", 1)
+        comment = "#" + after
+    else:
+        before = line
+    fields = before.split()
+    if len(fields) < 4 or fields[2] != "swap":
+        return None
+    options = [item for item in fields[3].split(",") if item and not item.startswith("pri=")]
+    if priority >= 0:
+        options.append(f"pri={priority}")
+    fields[3] = ",".join(options) if options else "defaults"
+    lines[index] = "\t".join(fields) + (("\t" if comment and not comment.startswith(" ") else "") + comment if comment else "")
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
+def _atomic_write(path: Path, contents: str, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(contents)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(name, mode)
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def _validate(payload: str) -> list[dict]:
+    if len(payload) > 65536:
+        raise ValueError("Swap priority request is too large")
+    try:
+        requested = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise ValueError("Invalid swap priority request") from error
+    if not isinstance(requested, list) or not requested:
+        raise ValueError("No swap priorities were provided")
+    active = {item["source"]: item for item in active_swaps()}
+    output, seen = [], set()
+    for item in requested:
+        if not isinstance(item, dict) or set(item) != {"source", "priority"}:
+            raise ValueError("Invalid swap priority entry")
+        source, priority = item["source"], item["priority"]
+        if not isinstance(source, str) or source not in active:
+            raise ValueError("Swap device list changed; refresh and retry")
+        if source in seen:
+            raise ValueError("Duplicate swap device")
+        if type(priority) is not int or not -1 <= priority <= 32767:
+            raise ValueError("Priority must be -1 (automatic) or 0–32767")
+        seen.add(source)
+        output.append({"source": source, "priority": priority, "type": active[source]["type"]})
+    if seen != set(active):
+        raise ValueError("Swap device list changed; refresh and retry")
+    return output
+
+
+def apply(payload: str) -> None:
+    entries = _validate(payload)
+    plans: dict[Path, str] = {}
+    fstab_text = FSTAB.read_text(encoding="utf-8") if FSTAB.exists() else ""
+    zram_lines = [
+        "# Managed by Tab Companion. Applies when swap is next activated.",
+        "# -1 asks zram-generator to use its default priority.",
+    ]
+    for entry in entries:
+        source, priority = entry["source"], entry["priority"]
+        if re.fullmatch(r"/dev/zram[0-9]+", source):
+            zram_lines.extend((f"[{Path(source).name}]", f"swap-priority = {priority}", ""))
+            continue
+        updated_fstab = _set_fstab_priority(fstab_text, source, priority)
+        if updated_fstab is not None:
+            fstab_text = updated_fstab
+            continue
+        # Native .swap units can be adjusted with a drop-in. Do not run
+        # swapoff/swapon here: that can cause memory pressure or OOM.
+        escaped = subprocess.run(
+            ["/usr/bin/systemd-escape", "--path", "--suffix=swap", source],
+            check=True, capture_output=True, text=True, timeout=3,
+        ).stdout.strip()
+        if not escaped or "/" in escaped or escaped in {".", ".."}:
+            raise ValueError(f"Cannot resolve systemd swap unit for {source}")
+        dropin = SYSTEMD_DIR / f"{escaped}.d/90-tab-companion-priority.conf"
+        contents = (
+            "# Managed by Tab Companion. Applies when this swap is next activated.\n"
+            "[Swap]\n"
+            f"Priority={priority}\n"
+        )
+        plans[dropin] = contents
+    if any(entry["type"] == "partition" and not re.fullmatch(r"/dev/zram[0-9]+", entry["source"]) for entry in entries) or any(
+        entry["type"] == "file" for entry in entries
+    ):
+        if fstab_text:
+            plans[FSTAB] = fstab_text
+    if len(zram_lines) > 2:
+        plans[ZRAM_PRIORITY] = "\n".join(zram_lines).rstrip() + "\n"
+    for path, contents in plans.items():
+        _atomic_write(path, contents)
+    subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=True, timeout=10)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 1:
+        print("Usage: tab-companion-swap-priority '<JSON list>'", file=sys.stderr)
+        return 2
+    try:
+        apply(argv[0])
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print(f"Could not save swap priorities: {error}", file=sys.stderr)
+        return 1
+    print("Saved swap priorities for next activation; active swap was not interrupted.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

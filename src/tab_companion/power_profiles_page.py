@@ -25,6 +25,7 @@ from .zram import (
 BUSCTL = "/usr/bin/busctl"
 HELPER = "/usr/libexec/tab-companion-power-profile"
 ZRAM_HELPER = "/usr/libexec/tab-companion-zram-size"
+SWAP_HELPER = "/usr/libexec/tab-companion-swap-priority"
 SERVICE = "net.hadess.PowerProfiles"
 OBJECT = "/net/hadess/PowerProfiles"
 INTERFACE = "net.hadess.PowerProfiles"
@@ -98,12 +99,18 @@ class PowerProfilesPage(Adw.PreferencesPage):
             self.zram_scale.set_draw_value(False)
             self.zram_scale.set_round_digits(1)
             self.zram_scale.set_hexpand(True)
+            self.zram_scale.set_valign(Gtk.Align.CENTER)
+            self.zram_scale.set_vexpand(False)
             self.zram_editor = Gtk.SpinButton.new(self.zram_adjustment, 0.1, 1)
             self.zram_editor.set_numeric(True)
             self.zram_editor.set_width_chars(5)
+            self.zram_editor.set_valign(Gtk.Align.CENTER)
+            self.zram_editor.set_vexpand(False)
             self.zram_units = Gtk.Label(label=_("GB"))
             zram_controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             zram_controls.set_hexpand(True)
+            zram_controls.set_valign(Gtk.Align.CENTER)
+            zram_controls.set_vexpand(False)
             zram_controls.append(self.zram_scale)
             zram_controls.append(self.zram_editor)
             zram_controls.append(self.zram_units)
@@ -115,6 +122,19 @@ class PowerProfilesPage(Adw.PreferencesPage):
             self.zram_status_row.add_suffix(self.zram_apply_button)
             zram_group.add(self.zram_status_row)
             self.add(zram_group)
+        self._swap_rows = {}
+        if __import__("os").path.isfile(SWAP_HELPER):
+            swap_group = Adw.PreferencesGroup(
+                title=_("Swap Priority"),
+                description=_("Set a separate priority for each swap device. Saved values apply the next time swap is activated; active swap is not interrupted."),
+            )
+            self.swap_group = swap_group
+            self.swap_status_row = Adw.ActionRow(title=_("Swap devices"))
+            swap_group.add(self.swap_status_row)
+            self.swap_save_button = Gtk.Button(label=_("Save"), valign=Gtk.Align.CENTER)
+            self.swap_save_button.connect("clicked", self._save_swap_priorities)
+            self.swap_status_row.add_suffix(self.swap_save_button)
+            self.add(swap_group)
         self.refresh()
 
     def _read_active(self):
@@ -137,6 +157,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
             self.status_row.set_subtitle(_("Power profile service is unavailable."))
             self._updating = False
             self._refresh_zram()
+            self._refresh_swap_priorities()
             return
         self._active = profile
         self.mode_row.set_selected(PROFILE_INDEX[profile])
@@ -144,6 +165,106 @@ class PowerProfilesPage(Adw.PreferencesPage):
         self.status_row.set_subtitle(dict(PROFILES)[profile])
         self._updating = False
         self._refresh_zram()
+        self._refresh_swap_priorities()
+
+    def _refresh_swap_priorities(self):
+        if not hasattr(self, "swap_group"):
+            return
+        for row in self._swap_rows.values():
+            self.swap_group.remove(row["row"])
+        self._swap_rows.clear()
+        try:
+            from .swap_priority import active_swaps
+
+            swaps = active_swaps()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            self.swap_status_row.set_subtitle(_("Could not read active swap devices."))
+            self.swap_save_button.set_sensitive(False)
+            return
+        if not swaps:
+            self.swap_status_row.set_subtitle(_("No active swap devices found."))
+            self.swap_save_button.set_sensitive(False)
+            return
+        self.swap_status_row.set_subtitle(_("Changes apply next time swap is activated."))
+        for item in swaps:
+            source = item["source"]
+            current = item["priority"]
+            # -1 is the UI's "Automatic" value. Kernel-reported negative
+            # priorities all mean no explicit priority was configured.
+            selected = current if current >= 0 else -1
+            row = Adw.ActionRow(title=source)
+            mountpoint = item["mountpoint"] or _("Not mounted")
+            row.set_subtitle(
+                _("Type: {type} · Mountpoint: {mountpoint} · Used/size: {used:.2f} / {size:.2f} GB · Active priority: {priority}").format(
+                    type=item["type"], mountpoint=mountpoint,
+                    used=item["used"] / 1_000_000_000,
+                    size=item["size"] / 1_000_000_000,
+                    priority=(str(current) if current >= 0 else _("Automatic ({value})").format(value=current)),
+                )
+            )
+            adjustment = Gtk.Adjustment.new(selected, -1, 32767, 1, 100, 0)
+            spin = Gtk.SpinButton.new(adjustment, 1, 0)
+            spin.set_numeric(True)
+            spin.set_width_chars(6)
+            # ActionRow suffixes otherwise stretch vertically to the row's
+            # full height (especially with a wrapped two-line subtitle).
+            spin.set_valign(Gtk.Align.CENTER)
+            spin.set_vexpand(False)
+            spin.set_tooltip_text(_("Use -1 for automatic priority, or 0–32767; higher values are preferred."))
+            row.add_suffix(spin)
+            self.swap_group.add(row)
+            self._swap_rows[source] = {
+                "row": row, "spin": spin, "saved": selected, "device": item,
+            }
+            spin.connect("value-changed", self._swap_value_changed)
+        self.swap_save_button.set_sensitive(False)
+
+    def _swap_value_changed(self, _spin):
+        if not hasattr(self, "swap_save_button"):
+            return
+        self.swap_save_button.set_sensitive(any(
+            round(data["spin"].get_value()) != data["saved"]
+            for data in self._swap_rows.values()
+        ))
+
+    def _save_swap_priorities(self, *_args):
+        if not self._swap_rows:
+            return
+        import json
+
+        payload = [
+            {"source": source, "priority": round(data["spin"].get_value())}
+            for source, data in self._swap_rows.items()
+        ]
+        self.swap_save_button.set_sensitive(False)
+        self.swap_status_row.set_subtitle(_("Authorizing and saving priorities for next activation…"))
+        try:
+            self._swap_process = Gio.Subprocess.new(
+                admin_command("swap-priority", SWAP_HELPER, json.dumps(payload, separators=(",", ":"))),
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+            )
+            self._swap_process.communicate_utf8_async(None, None, self._swap_finished, payload)
+        except (GLib.Error, OSError):
+            self.swap_status_row.set_subtitle(_("Could not save swap priorities; existing settings remain."))
+
+    def _swap_finished(self, process, result, payload):
+        try:
+            success, stdout, stderr = process.communicate_utf8_finish(result)
+        except (GLib.Error, TypeError, ValueError):
+            success, stdout, stderr = False, "", ""
+        if not success or not process.get_successful():
+            self.swap_status_row.set_subtitle(
+                (stderr or _("Could not save swap priorities; existing settings remain.")).strip()
+            )
+            self._swap_value_changed(None)
+            return
+        for item in payload:
+            if item["source"] in self._swap_rows:
+                self._swap_rows[item["source"]]["saved"] = item["priority"]
+        self.swap_save_button.set_sensitive(False)
+        self.swap_status_row.set_subtitle(
+            _("Saved for next activation. Reboot to apply; active swap was left untouched.")
+        )
 
     def _refresh_zram(self):
         if self.zram_row is None:

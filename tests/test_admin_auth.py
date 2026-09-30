@@ -34,6 +34,11 @@ class AdminAuthTests(unittest.TestCase):
         path, args = helper.validate("power-profile", ["balanced"])
         self.assertEqual(path, "/usr/libexec/tab-companion-power-profile")
         self.assertEqual(args, ["balanced"])
+        path, args = helper.validate("swap-priority", ['[{"source":"/dev/zram0","priority":5}]'])
+        self.assertEqual(path, "/usr/libexec/tab-companion-swap-priority")
+        self.assertEqual(len(args), 1)
+        with self.assertRaisesRegex(ValueError, "Invalid swap-priority"):
+            helper.validate("swap-priority", ["x" * 65537])
         with self.assertRaisesRegex(ValueError, "Unsupported privileged operation"):
             helper.validate("/bin/sh", ["-c", "id"])
         with self.assertRaisesRegex(ValueError, "Invalid power-profile"):
