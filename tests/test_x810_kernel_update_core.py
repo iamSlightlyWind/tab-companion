@@ -50,6 +50,7 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
         self.original_images = core.IMAGES
         self.original_modules_root = core.MODULES_ROOT
         self.original_boot_sets_root = core.BOOT_SETS_ROOT
+        self.original_installed_state_path = core.INSTALLED_STATE_PATH
         core.PARTITIONS = {}
         for name in ("boot", "init_boot", "vendor_boot", "dtbo"):
             device = self.devices_dir / name
@@ -58,6 +59,7 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
         core.IMAGES = {name + ".img": 128 for name in core.PARTITIONS}
         core.MODULES_ROOT = self.root / "usr-lib-modules"
         core.BOOT_SETS_ROOT = self.root / "boot-sets"
+        core.INSTALLED_STATE_PATH = self.root / "var/lib/tab-companion/x810-kernel-update.json"
         current_modules = core.MODULES_ROOT / os.uname().release
         current_modules.mkdir(parents=True)
         (current_modules / "sample.ko").write_bytes(b"old known-good module")
@@ -65,6 +67,7 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
         self.addCleanup(setattr, core, "IMAGES", self.original_images)
         self.addCleanup(setattr, core, "MODULES_ROOT", self.original_modules_root)
         self.addCleanup(setattr, core, "BOOT_SETS_ROOT", self.original_boot_sets_root)
+        self.addCleanup(setattr, core, "INSTALLED_STATE_PATH", self.original_installed_state_path)
 
     @staticmethod
     def _digest(data):
@@ -277,6 +280,10 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
             self.assertEqual((core.BOOT_SETS_ROOT / "fedora" / (name + ".img")).read_bytes(),
                              (release_dir / (name + ".img")).read_bytes())
         self.assertEqual((core.BOOT_SETS_ROOT / "fedora" / "name.txt").read_text(), "Fedora\n")
+        history = json.loads(core.INSTALLED_STATE_PATH.read_text())
+        self.assertEqual(history["device"], "SM-X810")
+        self.assertEqual(history["history"][-1]["release_tag"], manifest["release_tag"])
+        self.assertEqual(history["history"][-1]["source_commit"], manifest["source_commit"])
 
     def test_failed_partition_write_restores_all_four_known_good_images(self):
         release_dir, manifest, assets, backup_dir, stage = self._prepare_apply("202")
@@ -297,6 +304,7 @@ class X810KernelUpdateCoreTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "all four saved images were restored and verified"):
             self._apply_images(release_dir, self.selected, backup_dir, stage, write_image=fail_once)
+        self.assertFalse(core.INSTALLED_STATE_PATH.exists())
         for name, (device, _size) in core.PARTITIONS.items():
             self.assertEqual(Path(device).read_bytes(), original[name])
         self.assertEqual((old_set / "boot.img").read_bytes(), b"previous staged Fedora set")

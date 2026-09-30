@@ -16,6 +16,7 @@ from .x810_kernel_update import (
     DEFAULT_REPOSITORY,
     download_x810_release,
     fetch_latest_x810_release,
+    load_installed_x810_release,
     load_backup_folder_info,
     save_backup_folder,
 )
@@ -168,12 +169,22 @@ class X810KernelUpdateSection(Adw.PreferencesGroup):
             self.release = None
             self._set_status(_("Couldn't check kernel updates"), error, warning=True)
         else:
-            self.release = release
-            self._set_status(
-                _("X810 build {number} is available").format(number=release.build_number),
-                _("Fedora {version} · commit {commit} · kernel.rpm plus four boot images").format(
-                    version=release.port_version, commit=release.source_commit[:12]),
-            )
+            installed = load_installed_x810_release()
+            if installed and installed["release_tag"] == release.tag:
+                self.release = None
+                self._set_status(
+                    _("X810 build {number} is already installed").format(number=release.build_number),
+                    _("Latest build · commit {commit} · installed {date}").format(
+                        commit=release.source_commit[:12],
+                        date=installed.get("installed_utc", _("date unavailable"))),
+                )
+            else:
+                self.release = release
+                self._set_status(
+                    _("X810 build {number} is available").format(number=release.build_number),
+                    _("Fedora {version} · commit {commit} · kernel.rpm plus four boot images").format(
+                        version=release.port_version, commit=release.source_commit[:12]),
+                )
         self._refresh_apply()
         return GLib.SOURCE_REMOVE
 

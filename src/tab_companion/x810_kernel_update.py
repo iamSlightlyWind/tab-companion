@@ -41,6 +41,7 @@ KERNEL_ASSETS = (*PARTITIONS, "kernel.rpm")
 MAX_KERNEL_RPM = 1024 * 1024 * 1024
 MAX_BOOT_BUNDLE_BYTES = MAX_KERNEL_RPM + sum(PARTITIONS.values())
 ALLOWED_DOWNLOAD_HOSTS = {"github.com", "release-assets.githubusercontent.com"}
+INSTALLED_STATE_PATH = Path("/var/lib/tab-companion/x810-kernel-update.json")
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,33 @@ class X810KernelRelease:
     source_commit: str
     port_version: str
     assets: dict[str, ReleaseAsset]
+
+
+def load_installed_x810_release(path: Path = INSTALLED_STATE_PATH) -> dict | None:
+    """Read the root-written local update history without trusting user-writable state."""
+    try:
+        info = path.lstat()
+        parent_info = path.parent.lstat()
+        if (not stat.S_ISREG(info.st_mode) or path.is_symlink() or info.st_uid != 0
+                or info.st_mode & 0o022 or not 1 <= info.st_size <= 32 * 1024
+                or not stat.S_ISDIR(parent_info.st_mode) or path.parent.is_symlink()
+                or parent_info.st_uid != 0 or parent_info.st_mode & 0o022):
+            return None
+        state = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(state, dict) or state.get("schema_version") != 1
+                or state.get("device") != "SM-X810" or not isinstance(state.get("history"), list)):
+            return None
+        for entry in reversed(state["history"]):
+            if not isinstance(entry, dict):
+                continue
+            tag = entry.get("release_tag")
+            commit = entry.get("source_commit")
+            if (isinstance(tag, str) and RELEASE_TAG.fullmatch(tag)
+                    and isinstance(commit, str) and COMMIT.fullmatch(commit)):
+                return entry
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return None
 
 
 def backup_folder_config_path() -> Path:
