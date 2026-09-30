@@ -197,11 +197,11 @@ class PowerProfilesPage(Adw.PreferencesPage):
 
     def _zram_finished(self, process, result, size):
         try:
-            _stdout, _stderr = process.communicate_utf8_finish(result)
-        except (GLib.Error, TypeError):
+            _stdout, _stderr, communication_error = process.communicate_utf8_finish(result)
+        except (GLib.Error, TypeError, ValueError):
             self._zram_failed()
             return
-        if not process.get_successful():
+        if communication_error is not None or not process.get_successful():
             self._zram_failed()
             return
         self._zram_configured = size
