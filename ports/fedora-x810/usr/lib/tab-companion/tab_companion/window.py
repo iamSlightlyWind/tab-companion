@@ -315,7 +315,6 @@ class CompanionWindow(Adw.ApplicationWindow):
 
         self._boot_rows = []
         self._boot_storage_rows = []
-        self._boot_refresh()
         return self.boot_stack
 
     def _storage_widget(self, store):

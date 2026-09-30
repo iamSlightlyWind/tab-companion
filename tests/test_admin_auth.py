@@ -9,7 +9,7 @@ from tab_companion import admin_auth
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ADMIN_HELPER = ROOT / "ports/fedora-x810/usr/libexec/tab-companion-admin"
+ADMIN_HELPER = ROOT / "ports/fedora-x810/packaging/tab-companion-x810/usr/libexec/tab-companion-admin"
 POLICY = ROOT / "ports/fedora-x810/packaging/tab-companion-x810/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.Admin.policy"
 
 loader = importlib.machinery.SourceFileLoader("tab_companion_admin_helper", str(ADMIN_HELPER))
@@ -41,11 +41,13 @@ class AdminAuthTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid boot-switch"):
             helper.validate("boot-switch", ["../../etc/passwd"])
 
-    def test_zram_dispatch_is_fixed_and_accepts_only_allowlisted_sizes(self):
-        path, args = helper.validate("zram-size", ["43"])
-        self.assertEqual(path, "/usr/libexec/tab-companion-zram-size")
-        self.assertEqual(args, ["43"])
-        for args in ([], ["43", ";id"], ["0"], ["121"], ["4.3"]):
+    def test_zram_dispatch_accepts_tenths_of_decimal_gb_within_range(self):
+        for size in ("1", "43", "118", "120"):
+            with self.subTest(size=size):
+                path, args = helper.validate("zram-size", [size])
+                self.assertEqual(path, "/usr/libexec/tab-companion-zram-size")
+                self.assertEqual(args, [size])
+        for args in ([], ["43", ";id"], ["0"], ["121"], ["4.3"], ["-1"]):
             with self.subTest(args=args), self.assertRaisesRegex(ValueError, "Invalid zram-size"):
                 helper.validate("zram-size", args)
 
