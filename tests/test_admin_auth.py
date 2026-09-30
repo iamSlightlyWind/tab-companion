@@ -42,10 +42,10 @@ class AdminAuthTests(unittest.TestCase):
             helper.validate("boot-switch", ["../../etc/passwd"])
 
     def test_zram_dispatch_is_fixed_and_accepts_only_allowlisted_sizes(self):
-        path, args = helper.validate("zram-size", ["6144"])
+        path, args = helper.validate("zram-size", ["43"])
         self.assertEqual(path, "/usr/libexec/tab-companion-zram-size")
-        self.assertEqual(args, ["6144"])
-        for args in ([], ["4096", ";id"], ["4097"]):
+        self.assertEqual(args, ["43"])
+        for args in ([], ["43", ";id"], ["0"], ["121"], ["4.3"]):
             with self.subTest(args=args), self.assertRaisesRegex(ValueError, "Invalid zram-size"):
                 helper.validate("zram-size", args)
 

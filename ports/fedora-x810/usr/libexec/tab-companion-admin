@@ -44,8 +44,10 @@ def validate(operation: str, args: list[str]) -> tuple[str, list[str]]:
         raise ValueError("Invalid kernel-update request")
     if operation == "power-profile" and (len(args) != 1 or args[0] not in PROFILE_IDS):
         raise ValueError("Invalid power-profile request")
-    if operation == "zram-size" and (len(args) != 1 or args[0] not in {"1024", "2048", "3072", "4096", "6144", "8192"}):
-        raise ValueError("Invalid zram-size request")
+    if operation == "zram-size" and (
+        len(args) != 1 or not args[0].isdecimal() or not 1 <= int(args[0]) <= 120
+    ):
+        raise ValueError("Invalid zram-size request; use 1..120 tenths of GB")
     if operation == "keyboard-diagnostics" and args not in ([], ["--record-keys"]):
         raise ValueError("Invalid keyboard-diagnostics request")
     # Package/kernel helpers apply their own detailed path, checksum, model,
