@@ -86,7 +86,7 @@ DEFAULT_SOURCE_CODES = {
 # at "none" means "use this port default", just like passing Fn+F6..F11 through
 # preserves their firmware-provided Home/brightness/volume behaviour.
 DEFAULT_KEY_ACTIONS = {
-    "key-galaxy-ai": ("app", "io.github.agcarbajo.TabCompanion.desktop"),
+    "key-galaxy-ai": ("app", "dev.themajorones.slightlywind.companion.desktop"),
     "key-dex": ("key", "56+68"),              # Alt+F10
     "key-finder": ("overview", ""),           # Super tap / GNOME search
     "key-settings": ("app", "org.gnome.Settings.desktop"),
@@ -547,7 +547,7 @@ class HardwareService:
             # Galaxy AI is the one dedicated launcher owned by this port.
             targets = self.settings.get_value("action-targets").unpack()
             targets["key-galaxy-ai"] = (
-                "io.github.agcarbajo.TabCompanion.desktop"
+                "dev.themajorones.slightlywind.companion.desktop"
             )
             self.settings.set_value("action-targets", GLib.Variant("a{ss}", targets))
             self.settings.set_string("key-galaxy-ai", "app")

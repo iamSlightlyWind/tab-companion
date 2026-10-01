@@ -26,6 +26,7 @@ GESTURES = (
     ("circle-counterclockwise", N_("Counter-clockwise circle"), N_("Draw a counter-clockwise circle")),
 )
 KEYBOARD_HAPTIC_DURATIONS_MS = (24, 42, 66)
+HAPTICS_TEST_DURATION_MS = 500
 
 KEYS = (
     ("galaxy-ai", "Galaxy AI", N_("Tab Companion by default")),
@@ -762,7 +763,7 @@ class CompanionWindow(Adw.ApplicationWindow):
         group.add(enabled)
         self.haptics_strength = Adw.ComboRow(
             title=_("Strength"),
-            subtitle=_("Used by the on-screen keyboard and the test button."),
+            subtitle=_("Used for on-screen keyboard key presses."),
             model=Gtk.StringList.new([_("Light"), _("Medium"), _("Strong")]),
         )
         strength = min(3, max(1, self.settings.get_int("keyboard-haptics-strength")))
@@ -770,8 +771,8 @@ class CompanionWindow(Adw.ApplicationWindow):
         self.haptics_strength.connect("notify::selected", self._haptics_strength_selected)
         group.add(self.haptics_strength)
         self.haptics_test = Adw.ActionRow(
-            title=_("Test selected strength"),
-            subtitle=_("Reproduces exactly one on-screen keyboard key press."),
+            title=_("Test vibration"),
+            subtitle=_("Runs one clearly noticeable 500 ms vibration pulse."),
         )
         test = Gtk.Button(label=_("Test"), valign=Gtk.Align.CENTER, css_classes=["suggested-action"])
         test.connect("clicked", self._test_haptics)
@@ -800,10 +801,7 @@ class CompanionWindow(Adw.ApplicationWindow):
         self.settings.set_int("keyboard-haptics-strength", row.get_selected() + 1)
 
     def _test_haptics(self, _button):
-        strength = min(3, max(
-            1, self.settings.get_int("keyboard-haptics-strength")
-        ))
-        self.hardware.vibrate(KEYBOARD_HAPTIC_DURATIONS_MS[strength - 1], 65535)
+        self.hardware.vibrate(HAPTICS_TEST_DURATION_MS, 65535)
 
     def _keyboard_page(self):
         page = self._page()
@@ -1071,7 +1069,7 @@ class CompanionWindow(Adw.ApplicationWindow):
             self.battery_bar.set_text(_("Unknown"))
             self.battery_row.set_subtitle(_("Insert the S Pen to read its battery"))
         self.haptics_test.set_subtitle(
-            _("Reproduces exactly one on-screen keyboard key press.")
+            _("Runs one clearly noticeable 500 ms vibration pulse.")
             if state.haptics_available
             else _("The updated kernel is required")
         )
@@ -1082,7 +1080,7 @@ class CompanionWindow(Adw.ApplicationWindow):
         about = Adw.AboutWindow(
             transient_for=self,
             application_name="Tab Companion",
-            application_icon="io.github.agcarbajo.TabCompanion",
+            application_icon="dev.themajorones.slightlywind.companion",
             developer_name=_("gts9wifi Fedora port contributors"),
             version=VERSION,
             issue_url="https://github.com/iamSlightlyWind/tab-companion/issues",
