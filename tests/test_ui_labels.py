@@ -41,3 +41,10 @@ class UiLabelTests(unittest.TestCase):
         self.assertIn("self.zram_scale.set_vexpand(False)", source)
         self.assertIn("self.zram_editor.set_valign(Gtk.Align.CENTER)", source)
         self.assertIn("zram_controls.set_vexpand(False)", source)
+
+    def test_power_mode_reports_actual_cpu_governors(self):
+        source = (ROOT / "src/tab_companion/power_profiles_page.py").read_text(encoding="utf-8")
+        self.assertIn("def cpu_governor_summary", source)
+        self.assertIn("scaling_governor", source)
+        self.assertIn("self._profile_status(profile)", source)
+        self.assertIn("GLib.timeout_add(750, self._refresh_profile_status", source)

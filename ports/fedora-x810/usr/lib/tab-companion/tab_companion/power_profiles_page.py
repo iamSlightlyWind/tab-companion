@@ -8,6 +8,7 @@ not write CPU sysfs values directly or invent per-policy governor settings.
 
 import re
 import subprocess
+from pathlib import Path
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
@@ -36,6 +37,29 @@ PROFILES = (
 )
 PROFILE_IDS = tuple(profile_id for profile_id, _label in PROFILES)
 PROFILE_INDEX = {profile_id: index for index, (profile_id, _label) in enumerate(PROFILES)}
+CPUFREQ_ROOT = Path("/sys/devices/system/cpu/cpufreq")
+
+
+def cpu_governor_summary(root: Path = CPUFREQ_ROOT) -> str:
+    """Report the governors actually attached to CPUFreq policies, if any."""
+    values = []
+    for policy in sorted(root.glob("policy[0-9]*"), key=lambda path: path.name):
+        try:
+            governor = (policy / "scaling_governor").read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError):
+            continue
+        if governor:
+            values.append((policy.name, governor))
+    if not values:
+        return _("CPUFreq policies unavailable")
+    governors = {governor for _policy, governor in values}
+    if len(governors) == 1:
+        return _("CPU governor: {governor} ({count} policies)").format(
+            governor=values[0][1], count=len(values)
+        )
+    return _("CPU governors: {values}").format(
+        values=", ".join(f"{policy}={governor}" for policy, governor in values)
+    )
 
 
 def active_profile_from_busctl(output: str) -> str:
@@ -162,10 +186,13 @@ class PowerProfilesPage(Adw.PreferencesPage):
         self._active = profile
         self.mode_row.set_selected(PROFILE_INDEX[profile])
         self.mode_row.set_sensitive(True)
-        self.status_row.set_subtitle(dict(PROFILES)[profile])
+        self.status_row.set_subtitle(self._profile_status(profile))
         self._updating = False
         self._refresh_zram()
         self._refresh_swap_priorities()
+
+    def _profile_status(self, profile):
+        return f"{dict(PROFILES)[profile]} · {cpu_governor_summary()}"
 
     def _refresh_swap_priorities(self):
         if not hasattr(self, "swap_group"):
@@ -373,7 +400,24 @@ class PowerProfilesPage(Adw.PreferencesPage):
         self.mode_row.set_selected(PROFILE_INDEX[profile_id])
         self._updating = False
         self.mode_row.set_sensitive(True)
-        self.status_row.set_subtitle(dict(PROFILES)[profile_id])
+        self.status_row.set_subtitle(self._profile_status(profile_id))
+        # TuneD applies the selected profile asynchronously. Read back both
+        # the PPD selection and CPUFreq governor rather than implying that a
+        # successful D-Bus write proves the hardware policy changed.
+        GLib.timeout_add(750, self._refresh_profile_status, profile_id)
+
+    def _refresh_profile_status(self, requested_profile):
+        try:
+            actual_profile = self._read_active()
+        except (OSError, subprocess.SubprocessError, ValueError):
+            actual_profile = requested_profile
+        self._active = actual_profile
+        self._updating = True
+        self.mode_row.set_selected(PROFILE_INDEX[actual_profile])
+        self._updating = False
+        self.mode_row.set_sensitive(True)
+        self.status_row.set_subtitle(self._profile_status(actual_profile))
+        return GLib.SOURCE_REMOVE
 
     def _switch_failed(self):
         self._updating = True
