@@ -65,7 +65,10 @@ def main(argv: list[str]) -> int:
         return 1
 
     if settings["enabled"]:
-        print(f"Firefox memory cap saved at {settings['limit_deci_gb'] / 10:.1f} GB.")
+        print(
+            f"Firefox memory cap saved at {settings['limit_deci_gb'] / 10:.1f} GB "
+            "per active and future native Firefox session."
+        )
     else:
         print("Firefox memory cap disabled; limits applied by Tab Companion will be cleared.")
     return 0

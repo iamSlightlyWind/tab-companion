@@ -42,16 +42,17 @@ class FakeSystemctl:
     def __init__(self):
         self.properties = {}
         self.commands = []
+        self.scope_output = (
+            "app-gnome-org.mozilla.firefox-123.scope loaded active running Firefox\n"
+            "app-flatpak-org.mozilla.firefox-456.scope loaded active running Flatpak Firefox\n"
+            "app-gnome-org.chromium.Chromium-789.scope loaded active running Chromium\n"
+        )
 
     def __call__(self, argv, **kwargs):
         args = argv[2:]
         self.commands.append(args)
         if args[0] == "list-units":
-            return subprocess.CompletedProcess(argv, 0, stdout=(
-                "app-gnome-org.mozilla.firefox-123.scope loaded active running Firefox\n"
-                "app-flatpak-org.mozilla.firefox-456.scope loaded active running Flatpak Firefox\n"
-                "app-gnome-org.chromium.Chromium-789.scope loaded active running Chromium\n"
-            ))
+            return subprocess.CompletedProcess(argv, 0, stdout=self.scope_output)
         if args[0] == "show":
             unit = args[-1]
             high, maximum = self.properties.get(unit, ("infinity", "infinity"))
@@ -114,6 +115,34 @@ app-gnome-org.chromium.Chromium-126.scope loaded active running Chromium
             agent.step()
             self.assertEqual(fake.properties[unit], ("infinity", "infinity"))
             self.assertNotIn("app-flatpak-org.mozilla.firefox-456.scope", fake.properties)
+
+    def test_agent_caps_every_current_and_future_native_firefox_session(self):
+        fake = FakeSystemctl()
+        second = "app-org.mozilla.firefox-124.scope"
+        future = "app-gnome-org.mozilla.firefox-125.scope"
+        fake.scope_output += f"{second} loaded active running Firefox private\n"
+        settings = {"enabled": True, "limit_deci_gb": 27}
+        with tempfile.TemporaryDirectory() as directory:
+            agent = AGENT.FirefoxMemoryAgent(
+                run=fake, config_reader=lambda: settings,
+                state_path=Path(directory) / "managed.json",
+                report_path=Path(directory) / "status.json",
+            )
+            status = agent.step()
+            first = "app-gnome-org.mozilla.firefox-123.scope"
+            self.assertEqual(status["firefox_sessions"], 2)
+            self.assertEqual(status["applied_sessions"], 2)
+            for unit in (first, second):
+                self.assertEqual(fake.properties[unit], ("2700000000", "2700000000"))
+
+            # A browser session started after the agent is running is picked up
+            # by the next polling pass, alongside sessions that were already open.
+            fake.scope_output += f"{future} loaded active running Firefox second window\n"
+            status = agent.step()
+            self.assertEqual(status["firefox_sessions"], 3)
+            self.assertEqual(status["applied_sessions"], 3)
+            self.assertEqual(fake.properties[future], ("2700000000", "2700000000"))
+            self.assertEqual(fake.properties[first], ("2700000000", "2700000000"))
 
     def test_setting_helper_persists_then_enables_user_service_without_root(self):
         with tempfile.TemporaryDirectory() as directory:

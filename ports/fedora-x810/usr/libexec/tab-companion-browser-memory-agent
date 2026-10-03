@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: MIT
-"""Apply a per-user RAM ceiling to native, GNOME-launched Firefox scopes."""
+"""Apply a per-user RAM ceiling to every active and future native Firefox app scope."""
 
 from __future__ import annotations
 

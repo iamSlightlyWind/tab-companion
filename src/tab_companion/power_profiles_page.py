@@ -172,7 +172,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
             )
             self.browser_memory_enabled_row = Adw.SwitchRow(
                 title=_("Limit Firefox memory"),
-                subtitle=_("Applies to the native Firefox package, including future launches."),
+                subtitle=_("Applies to all current and future native Firefox sessions; Flatpak is excluded."),
             )
             self.browser_memory_enabled_row.set_active(self._browser_saved["enabled"])
             self.browser_memory_enabled_row.connect("notify::active", self._browser_memory_value_changed)
