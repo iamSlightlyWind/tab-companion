@@ -15,6 +15,7 @@ HELPERS = {
     "power-profile": "/usr/libexec/tab-companion-power-profile",
     "zram-size": "/usr/libexec/tab-companion-zram-size",
     "swap-priority": "/usr/libexec/tab-companion-swap-priority",
+    "thermal-limit": "/usr/libexec/tab-companion-thermal-setting",
     "keyboard-recover": "/usr/libexec/tab-companion-keyboard-recover",
     "keyboard-diagnostics": "/usr/libexec/tab-companion-keyboard-diagnostics",
 }
@@ -55,6 +56,8 @@ def validate(operation: str, args: list[str]) -> tuple[str, list[str]]:
         len(args) != 1 or len(args[0]) > 65536
     ):
         raise ValueError("Invalid swap-priority request")
+    if operation == "thermal-limit" and (len(args) != 1 or len(args[0]) > 4096):
+        raise ValueError("Invalid thermal-limit request")
     if operation == "keyboard-diagnostics" and args not in ([], ["--record-keys"]):
         raise ValueError("Invalid keyboard-diagnostics request")
     # Package/kernel helpers apply their own detailed path, checksum, model,

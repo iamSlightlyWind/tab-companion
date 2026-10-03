@@ -30,6 +30,14 @@ install -m 0755 usr/libexec/tab-companion-zram-size \
     "$stage/usr/libexec/tab-companion-zram-size"
 install -m 0755 usr/libexec/tab-companion-swap-priority \
     "$stage/usr/libexec/tab-companion-swap-priority"
+install -m 0755 usr/libexec/tab-companion-thermal-setting \
+    "$stage/usr/libexec/tab-companion-thermal-setting"
+install -m 0755 usr/libexec/tab-companion-browser-memory-setting \
+    "$stage/usr/libexec/tab-companion-browser-memory-setting"
+install -m 0755 usr/libexec/tab-companion-browser-memory-agent \
+    "$stage/usr/libexec/tab-companion-browser-memory-agent"
+install -D -m 0644 usr/lib/systemd/user/tab-companion-browser-memory.service \
+    "$stage/usr/lib/systemd/user/tab-companion-browser-memory.service"
 install -m 0644 packaging/io.github.agcarbajo.TabCompanion.X810.policy \
     "$stage/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.X810.policy"
 install -m 0644 packaging/tab-companion-x810/usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.PowerProfile.policy \

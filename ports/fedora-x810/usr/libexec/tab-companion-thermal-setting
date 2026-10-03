@@ -1,0 +1,49 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Persist Tab Companion's bounded X810 temperature-limiter preference."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+CONFIG = Path("/etc/x810-thermal-limit.json")
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 1 or len(argv[0]) > 4096:
+        print("Usage: tab-companion-thermal-setting '<JSON settings>'", file=sys.stderr)
+        return 2
+    try:
+        value = json.loads(argv[0])
+        if (not isinstance(value, dict) or set(value) != {"enabled", "threshold_c"}
+                or type(value["enabled"]) is not bool
+                or type(value["threshold_c"]) is not int
+                or not 50 <= value["threshold_c"] <= 85):
+            raise ValueError("Invalid settings; expected enabled and a 50–85°C threshold")
+    except (json.JSONDecodeError, ValueError) as error:
+        print(f"Could not save temperature limit: {error}", file=sys.stderr)
+        return 2
+
+    CONFIG.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".x810-thermal-limit.", dir=CONFIG.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, CONFIG)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print("Temperature limit saved; the running service will apply it within one second.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

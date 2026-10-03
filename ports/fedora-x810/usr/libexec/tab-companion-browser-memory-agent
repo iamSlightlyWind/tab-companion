@@ -1,0 +1,199 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Apply a per-user RAM ceiling to native, GNOME-launched Firefox scopes."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+sys.path.insert(0, "/usr/lib/tab-companion")
+from tab_companion.browser_memory import (  # noqa: E402
+    DEFAULT_SETTINGS,
+    firefox_scope_names,
+    read_settings,
+    status_path,
+    valid_settings,
+)
+
+SYSTEMCTL = "/usr/bin/systemctl"
+POLL_SECONDS = 3
+
+
+def runtime_dir() -> Path:
+    return Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "tab-companion-browser-memory"
+
+
+def atomic_json(path: Path, value: object, mode: int = 0o600) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+class FirefoxMemoryAgent:
+    def __init__(self, run=subprocess.run, config_reader=read_settings,
+                 state_path: Path | None = None, report_path: Path | None = None):
+        self.run = run
+        self.config_reader = config_reader
+        self.state_path = state_path or runtime_dir() / "managed-scopes.json"
+        self.report_path = report_path or status_path()
+        self.managed = self._load_state()
+
+    def _load_state(self) -> dict[str, int]:
+        try:
+            value = json.loads(self.state_path.read_text(encoding="utf-8"))
+            if isinstance(value, dict):
+                return {
+                    name: limit for name, limit in value.items()
+                    if isinstance(name, str) and name.endswith(".scope")
+                    and type(limit) is int and limit > 0
+                }
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        return {}
+
+    def _call(self, *args: str) -> str:
+        result = self.run(
+            [SYSTEMCTL, "--user", *args], check=True, capture_output=True,
+            text=True, timeout=5,
+        )
+        return result.stdout
+
+    def _properties(self, unit: str) -> tuple[str, str] | None:
+        try:
+            output = self._call(
+                "show", "--property=MemoryHigh", "--property=MemoryMax", "--value", unit
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        values = output.splitlines()
+        return (values[0].strip(), values[1].strip()) if len(values) >= 2 else None
+
+    def _set_limit(self, unit: str, limit_bytes: int | None) -> None:
+        value = "infinity" if limit_bytes is None else str(limit_bytes)
+        self._call(
+            "set-property", "--runtime", unit,
+            f"MemoryHigh={value}", f"MemoryMax={value}",
+        )
+
+    def _save_state(self) -> None:
+        atomic_json(self.state_path, self.managed)
+
+    def step(self) -> dict:
+        settings = valid_settings(self.config_reader()) or dict(DEFAULT_SETTINGS)
+        output = self._call(
+            "list-units", "--type=scope", "--state=running", "--no-legend",
+            "--plain", "--no-pager",
+        )
+        scopes = firefox_scope_names(output)
+        applied = 0
+        errors = []
+
+        if settings["enabled"]:
+            limit_bytes = settings["limit_deci_gb"] * 100_000_000
+            current_managed = {}
+            for unit in scopes:
+                try:
+                    wanted = (str(limit_bytes), str(limit_bytes))
+                    if self._properties(unit) != wanted:
+                        self._set_limit(unit, limit_bytes)
+                    current_managed[unit] = limit_bytes
+                    applied += 1
+                except (OSError, subprocess.SubprocessError) as error:
+                    errors.append(f"{unit}: {error}")
+            self.managed = current_managed
+        else:
+            active = set(scopes)
+            for unit, previous_limit in self.managed.items():
+                if unit not in active:
+                    continue
+                try:
+                    expected = (str(previous_limit), str(previous_limit))
+                    if self._properties(unit) == expected:
+                        self._set_limit(unit, None)
+                except (OSError, subprocess.SubprocessError) as error:
+                    errors.append(f"{unit}: {error}")
+            self.managed = {}
+
+        self._save_state()
+        status = {
+            "enabled": settings["enabled"],
+            "limit_deci_gb": settings["limit_deci_gb"],
+            "firefox_sessions": len(scopes),
+            "applied_sessions": applied,
+            "error": "; ".join(errors) if errors else None,
+        }
+        atomic_json(self.report_path, status, 0o600)
+        return status
+
+    def restore(self) -> None:
+        """Remove only limits this agent applied, when they still match."""
+        try:
+            scopes = set(firefox_scope_names(self._call(
+                "list-units", "--type=scope", "--state=running", "--no-legend",
+                "--plain", "--no-pager",
+            )))
+        except (OSError, subprocess.SubprocessError):
+            scopes = set()
+        for unit, previous_limit in self.managed.items():
+            if unit not in scopes:
+                continue
+            try:
+                expected = (str(previous_limit), str(previous_limit))
+                if self._properties(unit) == expected:
+                    self._set_limit(unit, None)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        self.managed.clear()
+        self._save_state()
+
+
+def main() -> int:
+    agent = FirefoxMemoryAgent()
+    stopping = False
+
+    def stop(_signum, _frame):
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        while not stopping:
+            try:
+                agent.step()
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                atomic_json(agent.report_path, {
+                    "enabled": agent.config_reader().get("enabled", False),
+                    "limit_deci_gb": agent.config_reader().get("limit_deci_gb", 20),
+                    "firefox_sessions": 0,
+                    "applied_sessions": 0,
+                    "error": str(error),
+                }, 0o600)
+            for _ in range(POLL_SECONDS * 10):
+                if stopping:
+                    break
+                time.sleep(0.1)
+    finally:
+        agent.restore()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

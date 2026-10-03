@@ -1,11 +1,8 @@
 # SPDX-License-Identifier: MIT
-"""Small UI for the system power-profile D-Bus API.
+"""Power-profile, CPU temperature, and memory controls for Fedora X810."""
 
-Fedora X810 uses tuned-ppd to implement the standard PowerProfiles API. This
-page deliberately changes only one of the three advertised profiles; it does
-not write CPU sysfs values directly or invent per-policy governor settings.
-"""
-
+import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -21,12 +18,21 @@ from .zram import (
     active_size_bytes,
     parse_configured_size,
 )
+from .thermal_limit import MAX_THRESHOLD_C, MIN_THRESHOLD_C, read_settings, read_status
+from .browser_memory import (
+    MAX_LIMIT_DECI_GB,
+    MIN_LIMIT_DECI_GB,
+    read_settings as read_browser_settings,
+    read_status as read_browser_status,
+)
 
 
 BUSCTL = "/usr/bin/busctl"
 HELPER = "/usr/libexec/tab-companion-power-profile"
 ZRAM_HELPER = "/usr/libexec/tab-companion-zram-size"
 SWAP_HELPER = "/usr/libexec/tab-companion-swap-priority"
+THERMAL_HELPER = "/usr/libexec/tab-companion-thermal-setting"
+BROWSER_MEMORY_HELPER = "/usr/libexec/tab-companion-browser-memory-setting"
 SERVICE = "net.hadess.PowerProfiles"
 OBJECT = "/net/hadess/PowerProfiles"
 INTERFACE = "net.hadess.PowerProfiles"
@@ -102,6 +108,122 @@ class PowerProfilesPage(Adw.PreferencesPage):
         self.status_row.add_suffix(refresh)
         self.add(group)
 
+        self.thermal_group = None
+        if os.path.isfile(THERMAL_HELPER):
+            self._thermal_saved = read_settings()
+            self.thermal_group = Adw.PreferencesGroup(
+                title=_("SoC temperature limit"),
+                description=_("Reduce CPU frequency when the hottest SoC sensor stays above the limit. Kernel thermal protection remains active."),
+            )
+            self.thermal_enabled_row = Adw.SwitchRow(
+                title=_("Temperature-based CPU limit"),
+                subtitle=_("Cap CPU policy maximums at 80% while hot."),
+            )
+            self.thermal_enabled_row.set_active(self._thermal_saved["enabled"])
+            self.thermal_enabled_row.connect("notify::active", self._thermal_value_changed)
+            self.thermal_group.add(self.thermal_enabled_row)
+
+            self.thermal_threshold_row = Adw.ActionRow(title=_("Temperature limit"))
+            self.thermal_adjustment = Gtk.Adjustment.new(
+                self._thermal_saved["threshold_c"], MIN_THRESHOLD_C, MAX_THRESHOLD_C, 1, 5, 0
+            )
+            self.thermal_adjustment.connect("value-changed", self._thermal_value_changed)
+            self.thermal_scale = Gtk.Scale.new(Gtk.Orientation.HORIZONTAL, self.thermal_adjustment)
+            self.thermal_scale.set_draw_value(False)
+            self.thermal_scale.set_digits(0)
+            self.thermal_scale.set_hexpand(True)
+            self.thermal_scale.set_valign(Gtk.Align.CENTER)
+            self.thermal_scale.set_vexpand(False)
+            self.thermal_editor = Gtk.SpinButton.new(self.thermal_adjustment, 1, 0)
+            self.thermal_editor.set_numeric(True)
+            self.thermal_editor.set_width_chars(3)
+            self.thermal_editor.set_valign(Gtk.Align.CENTER)
+            self.thermal_editor.set_vexpand(False)
+            self.thermal_units = Gtk.Label(label=_("°C"))
+            controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            controls.set_hexpand(True)
+            controls.set_valign(Gtk.Align.CENTER)
+            controls.set_vexpand(False)
+            controls.append(self.thermal_scale)
+            controls.append(self.thermal_editor)
+            controls.append(self.thermal_units)
+            self.thermal_threshold_row.add_suffix(controls)
+            self.thermal_group.add(self.thermal_threshold_row)
+
+            self.thermal_status_row = Adw.ActionRow(title=_("Temperature status"))
+            self.thermal_save_button = Gtk.Button(label=_("Save"), valign=Gtk.Align.CENTER)
+            self.thermal_save_button.connect("clicked", self._save_thermal_settings)
+            self.thermal_status_row.add_suffix(self.thermal_save_button)
+            self.thermal_group.add(self.thermal_status_row)
+            self.add(self.thermal_group)
+            self._refresh_thermal_status()
+            self._thermal_timer = GLib.timeout_add_seconds(2, self._refresh_thermal_status)
+
+        self.browser_memory_group = None
+        if os.path.isfile(BROWSER_MEMORY_HELPER):
+            self._browser_saved = read_browser_settings()
+            self.browser_memory_group = Adw.PreferencesGroup(
+                title=_("Browser RAM limit"),
+                description=_(
+                    "Limit native Firefox RAM use. Flatpak browsers are unsupported. "
+                    "To request another browser, open an issue or contribute a pull request. "
+                    "A hard limit can cause browser tabs to crash if they need more memory."
+                ),
+            )
+            self.browser_memory_enabled_row = Adw.SwitchRow(
+                title=_("Limit Firefox memory"),
+                subtitle=_("Applies to the native Firefox package, including future launches."),
+            )
+            self.browser_memory_enabled_row.set_active(self._browser_saved["enabled"])
+            self.browser_memory_enabled_row.connect("notify::active", self._browser_memory_value_changed)
+            self.browser_memory_group.add(self.browser_memory_enabled_row)
+
+            self.browser_memory_row = Adw.ActionRow(title=_("Maximum Firefox RAM"))
+            self.browser_memory_adjustment = Gtk.Adjustment.new(
+                self._browser_saved["limit_deci_gb"] / 10,
+                MIN_LIMIT_DECI_GB / 10,
+                MAX_LIMIT_DECI_GB / 10,
+                0.1,
+                1.0,
+                0,
+            )
+            self.browser_memory_adjustment.connect("value-changed", self._browser_memory_value_changed)
+            self.browser_memory_scale = Gtk.Scale.new(
+                Gtk.Orientation.HORIZONTAL, self.browser_memory_adjustment
+            )
+            self.browser_memory_scale.set_draw_value(False)
+            self.browser_memory_scale.set_digits(1)
+            self.browser_memory_scale.set_round_digits(1)
+            self.browser_memory_scale.set_hexpand(True)
+            self.browser_memory_scale.set_valign(Gtk.Align.CENTER)
+            self.browser_memory_scale.set_vexpand(False)
+            self.browser_memory_editor = Gtk.SpinButton.new(self.browser_memory_adjustment, 0.1, 1)
+            self.browser_memory_editor.set_numeric(True)
+            self.browser_memory_editor.set_width_chars(3)
+            self.browser_memory_editor.set_valign(Gtk.Align.CENTER)
+            self.browser_memory_editor.set_vexpand(False)
+            self.browser_memory_units = Gtk.Label(label=_("GB"))
+            browser_controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            browser_controls.set_hexpand(True)
+            browser_controls.set_valign(Gtk.Align.CENTER)
+            browser_controls.set_vexpand(False)
+            browser_controls.append(self.browser_memory_scale)
+            browser_controls.append(self.browser_memory_editor)
+            browser_controls.append(self.browser_memory_units)
+            self.browser_memory_row.add_suffix(browser_controls)
+            self.browser_memory_group.add(self.browser_memory_row)
+
+            self.browser_memory_status_row = Adw.ActionRow(title=_("Firefox limit status"))
+            self.browser_memory_save_button = Gtk.Button(label=_("Apply"), valign=Gtk.Align.CENTER)
+            self.browser_memory_save_button.connect("clicked", self._save_browser_memory_settings)
+            self.browser_memory_status_row.add_suffix(self.browser_memory_save_button)
+            self.browser_memory_group.add(self.browser_memory_status_row)
+            self.add(self.browser_memory_group)
+            self._refresh_browser_memory_status()
+            self._browser_memory_timer = GLib.timeout_add_seconds(
+                3, self._refresh_browser_memory_status
+            )
+
         self.zram_row = None
         self.zram_status_row = None
         if __import__("os").path.isfile(ZRAM_HELPER):
@@ -160,6 +282,145 @@ class PowerProfilesPage(Adw.PreferencesPage):
             self.swap_status_row.add_suffix(self.swap_save_button)
             self.add(swap_group)
         self.refresh()
+
+    def _thermal_selected(self):
+        return {
+            "enabled": self.thermal_enabled_row.get_active(),
+            "threshold_c": round(self.thermal_adjustment.get_value()),
+        }
+
+    def _thermal_value_changed(self, *_args):
+        if self.thermal_group is None:
+            return
+        self.thermal_save_button.set_sensitive(self._thermal_selected() != self._thermal_saved)
+
+    def _refresh_thermal_status(self):
+        if self.thermal_group is None:
+            return GLib.SOURCE_REMOVE
+        status = read_status()
+        if status is None:
+            self.thermal_status_row.set_subtitle(_("Thermal limiter service is unavailable."))
+        else:
+            def fmt(value):
+                return _("—") if value is None else _("{value:.1f}°C").format(value=value)
+
+            summary = _("Current {current} · Average {average} · Peak {peak} · {state}").format(
+                current=fmt(status.get("current_c")),
+                average=fmt(status.get("average_c")),
+                peak=fmt(status.get("peak_c")),
+                state=_("limiting") if status.get("limited") else _("not limiting"),
+            )
+            if status.get("error"):
+                summary += " · " + str(status["error"])
+            self.thermal_status_row.set_subtitle(summary)
+        self._thermal_value_changed()
+        return GLib.SOURCE_CONTINUE
+
+    def _browser_memory_selected(self):
+        return {
+            "enabled": self.browser_memory_enabled_row.get_active(),
+            "limit_deci_gb": round(self.browser_memory_adjustment.get_value() * 10),
+        }
+
+    def _browser_memory_value_changed(self, *_args):
+        if self.browser_memory_group is None:
+            return
+        self.browser_memory_save_button.set_sensitive(
+            self._browser_memory_selected() != self._browser_saved
+        )
+
+    def _refresh_browser_memory_status(self):
+        if self.browser_memory_group is None:
+            return GLib.SOURCE_REMOVE
+        status = read_browser_status()
+        if status is None:
+            summary = _("Save to start the per-user Firefox limiter.")
+        elif status.get("error"):
+            summary = str(status["error"])
+        elif not status["enabled"]:
+            summary = _("Disabled; Tab Companion-managed Firefox limits are cleared.")
+        elif status["firefox_sessions"] == 0:
+            summary = _("Enabled · waiting for native Firefox; Flatpak is not managed.")
+        else:
+            summary = _("{applied} of {running} native Firefox session(s) capped at {limit:.1f} GB.").format(
+                applied=status["applied_sessions"],
+                running=status["firefox_sessions"],
+                limit=status["limit_deci_gb"] / 10,
+            )
+        self.browser_memory_status_row.set_subtitle(summary)
+        self._browser_memory_value_changed()
+        return GLib.SOURCE_CONTINUE
+
+    def _save_browser_memory_settings(self, *_args):
+        selected = self._browser_memory_selected()
+        if selected == self._browser_saved:
+            return
+        self.browser_memory_save_button.set_sensitive(False)
+        self.browser_memory_status_row.set_subtitle(_("Saving Firefox memory limit…"))
+        try:
+            self._browser_memory_process = Gio.Subprocess.new(
+                [BROWSER_MEMORY_HELPER, json.dumps(selected, separators=(",", ":"))],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+            )
+            self._browser_memory_process.communicate_utf8_async(
+                None, None, self._browser_memory_save_finished, selected
+            )
+        except (GLib.Error, OSError):
+            self.browser_memory_status_row.set_subtitle(
+                _("Could not start Firefox memory limiter; previous setting remains.")
+            )
+            self.browser_memory_save_button.set_sensitive(True)
+
+    def _browser_memory_save_finished(self, process, result, selected):
+        try:
+            success, stdout, stderr = process.communicate_utf8_finish(result)
+        except (GLib.Error, TypeError, ValueError):
+            success, stdout, stderr = False, "", ""
+        if not success or not process.get_successful():
+            self.browser_memory_status_row.set_subtitle(
+                (stderr or _("Could not save Firefox memory limit; previous setting remains.")).strip()
+            )
+            self._browser_memory_value_changed()
+            return
+        self._browser_saved = selected
+        self.browser_memory_save_button.set_sensitive(False)
+        self._refresh_browser_memory_status()
+
+    def _save_thermal_settings(self, *_args):
+        selected = self._thermal_selected()
+        if selected == self._thermal_saved:
+            return
+        self.thermal_save_button.set_sensitive(False)
+        self.thermal_status_row.set_subtitle(_("Authorizing and saving thermal limit…"))
+        try:
+            self._thermal_process = Gio.Subprocess.new(
+                admin_command(
+                    "thermal-limit", THERMAL_HELPER,
+                    json.dumps(selected, separators=(",", ":")),
+                ),
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+            )
+            self._thermal_process.communicate_utf8_async(
+                None, None, self._thermal_save_finished, selected
+            )
+        except (GLib.Error, OSError):
+            self.thermal_status_row.set_subtitle(_("Could not save thermal limit; previous setting remains."))
+            self.thermal_save_button.set_sensitive(True)
+
+    def _thermal_save_finished(self, process, result, selected):
+        try:
+            success, _stdout, stderr = process.communicate_utf8_finish(result)
+        except (GLib.Error, TypeError, ValueError):
+            success, stderr = False, ""
+        if not success or not process.get_successful():
+            self.thermal_status_row.set_subtitle(
+                (stderr or _("Could not save thermal limit; previous setting remains.")).strip()
+            )
+            self._thermal_value_changed()
+            return
+        self._thermal_saved = selected
+        self.thermal_save_button.set_sensitive(False)
+        self._refresh_thermal_status()
 
     def _read_active(self):
         result = subprocess.run(

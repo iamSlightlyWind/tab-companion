@@ -1,0 +1,75 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Save native Firefox memory-limit settings and start the user agent."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, "/usr/lib/tab-companion")
+from tab_companion.browser_memory import config_path, valid_settings  # noqa: E402
+
+SYSTEMCTL = "/usr/bin/systemctl"
+UNIT = "tab-companion-browser-memory.service"
+
+
+def atomic_write(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 1 or len(argv[0]) > 4096:
+        print("Usage: tab-companion-browser-memory-setting '<JSON settings>'", file=sys.stderr)
+        return 2
+    try:
+        settings = valid_settings(json.loads(argv[0]))
+        if settings is None:
+            raise ValueError("Use enabled=true/false and a Firefox memory limit from 1.0–10.0 GB in 0.1 GB steps")
+    except (json.JSONDecodeError, ValueError) as error:
+        print(f"Could not save browser memory setting: {error}", file=sys.stderr)
+        return 2
+
+    config = config_path()
+    old = config.read_bytes() if config.exists() else None
+    payload = (json.dumps(settings, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    try:
+        atomic_write(config, payload)
+        subprocess.run([SYSTEMCTL, "--user", "daemon-reload"], check=True,
+                       capture_output=True, text=True, timeout=8)
+        subprocess.run([SYSTEMCTL, "--user", "enable", "--now", UNIT], check=True,
+                       capture_output=True, text=True, timeout=12)
+    except (OSError, subprocess.SubprocessError) as error:
+        if old is None:
+            config.unlink(missing_ok=True)
+        else:
+            atomic_write(config, old)
+        detail = getattr(error, "stderr", "") or str(error)
+        print(f"Could not start the browser memory agent; previous setting restored: {detail}".strip(),
+              file=sys.stderr)
+        return 1
+
+    if settings["enabled"]:
+        print(f"Firefox memory cap saved at {settings['limit_deci_gb'] / 10:.1f} GB.")
+    else:
+        print("Firefox memory cap disabled; limits applied by Tab Companion will be cleared.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

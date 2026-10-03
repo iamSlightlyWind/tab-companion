@@ -44,6 +44,15 @@ class FedoraPowerProfileTests(unittest.TestCase):
         self.assertTrue(policy.is_file())
         self.assertIn("auth_admin", policy.read_text())
 
+    def test_thermal_limit_helper_is_allowlisted_in_both_fedora_stages(self):
+        for relative in (
+            "ports/fedora-x810/usr/libexec/tab-companion-admin",
+            "ports/fedora-x810/packaging/tab-companion-x810/usr/libexec/tab-companion-admin",
+        ):
+            dispatcher = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn('"thermal-limit": "/usr/libexec/tab-companion-thermal-setting"', dispatcher)
+            self.assertIn('operation == "thermal-limit"', dispatcher)
+
 
 if __name__ == "__main__":
     unittest.main()

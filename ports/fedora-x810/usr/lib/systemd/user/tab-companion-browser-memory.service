@@ -1,0 +1,20 @@
+[Unit]
+Description=Tab Companion native Firefox memory limit
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/tab-companion-browser-memory-agent
+Restart=on-failure
+RestartSec=3s
+RuntimeDirectory=tab-companion-browser-memory
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%t/tab-companion-browser-memory
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=default.target
