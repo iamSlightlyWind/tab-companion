@@ -6,6 +6,13 @@ experimental project derives from
 and was produced with substantial AI assistance. It is unofficial; review and
 validate it before use.
 
+<img width="1568" height="2650" alt="image" src="https://github.com/user-attachments/assets/99f13071-b42e-4e64-99e7-051ef19d5554" />
+
+<img width="1568" height="1182" alt="image" src="https://github.com/user-attachments/assets/3dbb2ba4-d4a3-4fd9-92f1-ebfb29af6a99" />
+
+<img width="1638" height="2184" alt="image" src="https://github.com/user-attachments/assets/feaae96d-7761-483e-ae24-ece4980b339c" />
+
+
 ## Install once
 
 1. Wait for a successful [build](https://github.com/iamSlightlyWind/tab-companion/actions/workflows/build-updates.yml)
