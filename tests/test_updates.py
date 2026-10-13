@@ -366,6 +366,8 @@ class UpdatesTests(unittest.TestCase):
                           side_effect=lambda name, installed=installed: f"/usr/bin/{name}" if name in installed else None):
                 self.assertEqual(package_manager(), expected)
         self.assertTrue(asset_supported_by_manager(type("Asset", (), {"format": "rpm"})(), "rpm"))
+        self.assertTrue(asset_supported_by_manager(
+            type("Asset", (), {"format": "rpm-transaction"})(), "rpm"))
 
     def test_repository_and_workflow_inputs_are_restricted(self):
         with patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.cache_home)}), \

@@ -10,6 +10,7 @@ from .actions import action_for, action_label, actions_for
 from .hardware import HardwareClient
 from .i18n import _, N_
 from .key_selector import KeyChooser, chord_label
+from .charging_page import ChargingPage, available as charging_available
 from .power_profiles_page import PowerProfilesPage, available as power_profiles_available
 from .updates_page import UpdatesPage, legacy_ubuntu_update_available
 
@@ -198,6 +199,10 @@ class CompanionWindow(Adw.ApplicationWindow):
         if power_profiles_available():
             self.view_stack.add_titled_with_icon(
                 PowerProfilesPage(), "performance", _("Performance"), "battery-level-60-symbolic"
+            )
+        if charging_available():
+            self.view_stack.add_titled_with_icon(
+                ChargingPage(), "charging", _("Charging"), "battery-level-90-symbolic"
             )
         if boot_sets.available():
             self.view_stack.add_titled_with_icon(

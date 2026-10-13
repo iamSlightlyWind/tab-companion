@@ -25,8 +25,6 @@ from .browser_memory import (
     read_settings as read_browser_settings,
     read_status as read_browser_status,
 )
-
-
 BUSCTL = "/usr/bin/busctl"
 HELPER = "/usr/libexec/tab-companion-power-profile"
 ZRAM_HELPER = "/usr/libexec/tab-companion-zram-size"

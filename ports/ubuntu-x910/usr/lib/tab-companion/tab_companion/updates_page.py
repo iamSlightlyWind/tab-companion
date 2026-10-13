@@ -270,6 +270,8 @@ class UpdatesPage(Adw.PreferencesPage):
             return
         asset = build.asset
         body = _("Tab Companion will download the package from successful build #{number}, verify its SHA-256, then ask the system package manager to install it.").format(number=build.run_number)
+        if asset.format == "rpm-transaction":
+            body = _("Tab Companion will download the X810 Fedora update from successful build #{number}, verify the bundle and each RPM, then install the port and compositor packages in one DNF transaction. WARNING: the Mutter compositor update is experimental for HDR testing; it may affect your GNOME session and does not yet establish working HDR.").format(number=build.run_number)
         if self.manager == "pacman":
             body += "\n\n" + _("Arch Linux requires a full system upgrade before installing a local package; pacman will upgrade the system first.")
         if asset.format == "aur-source":

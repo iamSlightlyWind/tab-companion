@@ -37,7 +37,7 @@ HEX_COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,180}$")
 SAFE_PACKAGE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:.+_~-]{0,127}$")
 SAFE_PACKAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_@-]{0,127}$")
-FORMATS = {"rpm", "deb", "pacman-local", "aur-source"}
+FORMATS = {"rpm", "rpm-transaction", "deb", "pacman-local", "aur-source"}
 _USER_AGENT = "Tab-Companion-Updater/1"
 _API_BASE = "https://api.github.com"
 _X810_PORT_REPO = ("iamslightlywind", "x810-fedroid")
@@ -767,7 +767,7 @@ def package_manager():
 def asset_supported_by_manager(asset, manager):
     supported = {
         "deb": {"deb"},
-        "rpm": {"rpm"},
+        "rpm": {"rpm", "rpm-transaction"},
         "pacman": {"pacman-local", "aur-source"},
     }.get(manager, set())
     return asset.format in supported

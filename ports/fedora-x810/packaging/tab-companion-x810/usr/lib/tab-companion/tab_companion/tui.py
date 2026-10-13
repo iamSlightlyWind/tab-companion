@@ -58,6 +58,14 @@ def _ask_confirm(prompt: str, *, input_fn=input, output_fn=print) -> bool:
     return input_fn("Type INSTALL to continue (anything else cancels): ").strip() == "INSTALL"
 
 
+def _package_confirmation(asset) -> str:
+    message = "The package SHA-256 will be verified before privileged installation."
+    if asset.format == "rpm-transaction":
+        message += (" WARNING: this is an experimental Mutter compositor update for HDR testing; "
+                    "it may affect the GNOME session and does not yet establish working HDR.")
+    return message
+
+
 def _run_package_channel(key: str, *, input_fn=input, output_fn=print):
     manager = package_manager()
     if manager not in ("deb", "rpm", "pacman"):
@@ -101,7 +109,7 @@ def _run_package_channel(key: str, *, input_fn=input, output_fn=print):
         output_fn(f"Installed build is newer (run {installed_run}); refusing downgrade to #{build.run_number}.")
         return
     output_fn(f"{key.title()} update: build #{build.run_number}, {asset.name}, {asset.size} bytes")
-    if not _ask_confirm("The package SHA-256 will be verified before privileged installation.",
+    if not _ask_confirm(_package_confirmation(asset),
                         input_fn=input_fn, output_fn=output_fn):
         output_fn("Cancelled; no package was installed.")
         return

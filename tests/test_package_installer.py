@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 import sys
 import hashlib
+import json
+import zipfile
 import os
 import stat
 from types import SimpleNamespace
@@ -11,7 +13,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tab_companion.package_installer import _copy_verified, _verify_package
+from tab_companion.package_installer import (
+    RPM_TRANSACTION_MANIFEST, _copy_verified, _extract_rpm_transaction, _verify_package, install
+)
 
 
 class PackageMetadataTests(unittest.TestCase):
@@ -41,6 +45,74 @@ class PackageMetadataTests(unittest.TestCase):
                 _verify_package(self.path, "rpm", "tab-companion", "2.0.0-1.fc44", "aarch64")
 
 
+class RpmTransactionTests(unittest.TestCase):
+    def _archive(self, root, *, member_name="mutter.rpm", payload=b"fake rpm"):
+        path = root / "transaction.zip"
+        record = {
+            "name": member_name,
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size": len(payload),
+            "package_name": "mutter",
+            "package_version": "50.5-1000000.123.fc44",
+        }
+        manifest = {"schema_version": 1, "project": "x810-fedora", "packages": [record]}
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(RPM_TRANSACTION_MANIFEST, json.dumps(manifest))
+            archive.writestr(member_name, payload)
+        return path
+
+    def test_transaction_extract_verifies_hash_and_rpm_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transaction = self._archive(root)
+            destination = root / "out"
+            destination.mkdir()
+            with patch("tab_companion.package_installer.subprocess.check_output",
+                       return_value="mutter\n50.5-1000000.123.fc44\naarch64"):
+                files = _extract_rpm_transaction(transaction, destination, "aarch64")
+            self.assertEqual([path.name for path in files], ["mutter.rpm"])
+            self.assertEqual(files[0].read_bytes(), b"fake rpm")
+
+    def test_transaction_rejects_traversal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transaction = self._archive(root, member_name="../mutter.rpm")
+            with self.assertRaisesRegex(ValueError, "unsafe or duplicate"):
+                _extract_rpm_transaction(transaction, root / "out", "aarch64")
+
+    def test_transaction_rejects_wrong_rpm_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transaction = self._archive(root)
+            destination = root / "out"
+            destination.mkdir()
+            with patch("tab_companion.package_installer.subprocess.check_output",
+                       return_value="mutter\n50.4-1.fc44\naarch64"):
+                with self.assertRaisesRegex(ValueError, "metadata"):
+                    _extract_rpm_transaction(transaction, destination, "aarch64")
+
+    def test_install_uses_one_atomic_dnf_transaction_for_all_rpms(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staged = root / "verified.zip"
+            staged.write_bytes(b"bundle")
+            rpms = [root / "port.rpm", root / "mutter.rpm", root / "common.rpm"]
+            with patch("tab_companion.package_installer._copy_verified", return_value=staged), \
+                 patch("tab_companion.package_installer.STAGING", root), \
+                 patch("tab_companion.package_installer._os_id", return_value="fedora"), \
+                 patch("tab_companion.package_installer.shutil.which", return_value="/usr/bin/dnf5"), \
+                 patch("tab_companion.package_installer._extract_rpm_transaction", return_value=rpms), \
+                 patch("tab_companion.package_installer._run") as run:
+                install(root / "download.zip", "a" * 64, "rpm-transaction",
+                        "x810-fedora-update", "0.1.0+123", "aarch64", os.getuid())
+            run.assert_called_once_with([
+                "/usr/bin/dnf5", "install", "--assumeyes",
+                "--setopt=clean_requirements_on_remove=False",
+                *(str(path) for path in rpms),
+            ])
+            self.assertFalse(staged.exists())
+
+
 class StagedPackageTests(unittest.TestCase):
     def test_staged_package_keeps_native_manager_suffix(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -51,6 +123,7 @@ class StagedPackageTests(unittest.TestCase):
             staging.mkdir()
             cases = (
                 ("rpm", ".rpm"),
+                ("rpm-transaction", ".zip"),
                 ("deb", ".deb"),
                 ("pacman-local", ".pkg.tar.zst"),
             )

@@ -22,6 +22,12 @@ class CompanionTuiTests(unittest.TestCase):
         actions = tui.menu_actions({"device": "other"}, "rpm")
         self.assertEqual([name for name, _label in actions], ["app", "port", "quit"])
 
+    def test_transaction_confirmation_warns_that_mutter_candidate_is_experimental(self):
+        warning = tui._package_confirmation(type("Asset", (), {"format": "rpm-transaction"})())
+        self.assertIn("experimental Mutter compositor update", warning)
+        self.assertIn("does not yet establish working HDR", warning)
+        self.assertNotIn("Mutter", tui._package_confirmation(type("Asset", (), {"format": "rpm"})()))
+
     def test_menu_invalid_choice_recovers_and_quit_exits_cleanly(self):
         answers = iter(("bad", "99", "5"))
         output = io.StringIO()
