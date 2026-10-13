@@ -10,6 +10,10 @@ object BootMaintenance {
     private var context: Context? = null
     private fun quote(value: String) = "'" + value.replace("'", "'\\''") + "'"
 
+    fun initialize(ctx: Context) {
+        context = ctx.applicationContext
+    }
+
     fun log(context: Context): String = context.getSharedPreferences("maintenance", 0)
         .getString("log", "") ?: ""
 
@@ -41,7 +45,36 @@ object BootMaintenance {
 
     fun beforeSwitch(): Boolean {
         val ctx = context ?: return false
-        return refresh(ctx, BootSets.discover(), BootSets.liveHashes(), allowBootstrap = true)
+        return captureAndroidIfRunning(ctx)
+    }
+
+    private fun captureAndroidIfRunning(ctx: Context): Boolean {
+        if (!BootSets.mountLinuxRoot()) {
+            record(ctx, "Android: shared Linuxroot boot-set storage is unavailable; switch cancelled.")
+            return false
+        }
+
+        // If Fedora is already staged, the live boot partitions describe the
+        // next boot, not the Android session currently running. Never replace
+        // Android's saved image set with those staged Fedora images.
+        val sets = BootSets.discover()
+        val live = BootSets.liveHashes()
+        val next = BootSets.identify(live, sets)
+        if (next != null && BootSets.isLinux(next)) {
+            record(ctx, "Android: Fedora is already staged; kept the Android snapshot unchanged.")
+            return true
+        }
+
+        // Save the exact boot partition contents currently in use by Android.
+        // Do not inspect kernel signatures or compare against stale hashes:
+        // this intentionally preserves Magisk/KernelSU-patched boot images.
+        val script = ctx.assets.open("refresh-android.sh").bufferedReader().use { it.readText() }
+        val result = Root.run("SET_ID='android'", "SYSTEM_NAME=${quote(BootSets.runningSystemName())}", script)
+        record(ctx, (if (result.ok) "Android: current boot files saved to shared Linuxroot storage.\n"
+                     else "Android: current boot snapshot failed (${result.code}).\n") + result.output.takeLast(2000))
+        if (!result.ok) return false
+        Prefs(ctx).clearTileCache()
+        return true
     }
 
     fun refresh(
@@ -50,87 +83,13 @@ object BootMaintenance {
         live: Map<String, String>,
         allowBootstrap: Boolean = false,
     ): Boolean {
-        context = ctx.applicationContext
-        val androidSets = sets.filterNot { BootSets.isLinux(it) }
-        val rootedAndroid = androidSets.filter { it.dir == "${BootSets.LINUX_SETS}/${it.id}" }
-        if (rootedAndroid.isEmpty()) {
-            if (!allowBootstrap) {
-                record(ctx, "Android: no Linuxroot Android backup yet; open Dualboot to capture it.")
-                return false
-            }
-            if (!BootSets.canBootstrapAndroid(sets, live)) {
-                record(ctx, "Android: initial backup blocked; X810 identity, hashes or set layout is ambiguous.")
-                return false
-            }
-            return bootstrapAndroid(ctx, live)
-        }
-
-        val android = rootedAndroid.singleOrNull()
-        if (android == null || androidSets.any { it.id != android.id } ||
-            !android.id.matches(Regex("[a-zA-Z0-9_-]+")) ||
-            BootSets.PARTITIONS.any { live[it.device]?.matches(Regex("[0-9a-f]{64}")) != true }) {
-            record(ctx, "Android: cannot identify one verified Android set or read all X810 partitions.")
-            return false
-        }
-        val decision = BootSets.backupDecision(sets, live)
-        if (decision == BootSets.BackupDecision.AMBIGUOUS) {
-            record(ctx, "Android: cannot identify a unique backup or read all X810 partitions.")
-            return false
-        }
-        val next = BootSets.identify(live, sets)
-        if (decision == BootSets.BackupDecision.LINUX_STAGED) {
-            record(ctx, "Android: Linux is staged; Android backup preserved.")
-            return true
-        }
-        if (decision == BootSets.BackupDecision.MIXED) {
-            record(ctx, "Android: mixed boot partitions; backup preserved, switching blocked.")
-            return false
-        }
-        val name = BootSets.runningSystemName()
-        val changed = next?.id != android.id
-        if (!changed && android.label == name) {
-            record(ctx, "Android: all four backup hashes match; no copy needed.")
-            return true
-        }
-        val expected = BootSets.PARTITIONS.joinToString("\n") {
-            "${live.getValue(it.device)}  ${it.name}.img"
-        }
-        val script = ctx.assets.open("refresh-android.sh").bufferedReader().use { it.readText() }
-        val result = Root.run("SET_ID=${quote(android.id)}", "SYSTEM_NAME=${quote(name)}",
-            "EXPECTED=${quote(expected)}", "CHANGED=${if (changed) 1 else 0}", script)
-        record(ctx, (if (result.ok) "" else "Android: backup refresh failed (${result.code}).\n") +
-            result.output.takeLast(2000))
-        if (!result.ok) return false
-        Prefs(ctx).clearTileCache()
-        return true
+        initialize(ctx)
+        if (sets.any { it.id.equals("android", ignoreCase = true) }) return true
+        if (!allowBootstrap) return true
+        // First-run seed only: make an Android snapshot so both systems are
+        // selectable. Never mislabel Fedora's already-staged set as Android.
+        if (BootSets.identify(live, sets)?.let(BootSets::isLinux) == true) return true
+        return captureAndroidIfRunning(ctx)
     }
 
-    /** Read-only from the boot partitions; all new files land on Linuxroot. */
-    private fun bootstrapAndroid(ctx: Context, live: Map<String, String>): Boolean {
-        if (!BootSets.mountLinuxRoot()) {
-            record(ctx, "Android: initial backup blocked; linuxroot is unavailable.")
-            return false
-        }
-        val expected = BootSets.PARTITIONS.joinToString("\n") {
-            "${live.getValue(it.device)}  ${it.name}.img"
-        }
-        val script = ctx.assets.open("refresh-android.sh").bufferedReader().use { it.readText() }
-        record(ctx, "Android: capturing the running X810 image set; no boot partition is written.")
-        val name = BootSets.runningSystemName()
-        val result = Root.run("SET_ID='android'", "SYSTEM_NAME=${quote(name)}",
-            "EXPECTED=${quote(expected)}", "CHANGED=1", script)
-        record(ctx, (if (result.ok) "" else "Android: initial snapshot failed (${result.code}).\n") +
-            result.output.takeLast(2000))
-        if (!result.ok) return false
-
-        val saved = BootSets.discover().singleOrNull {
-            it.id == "android" && it.dir == "${BootSets.LINUX_SETS}/android" && it.complete
-        }
-        if (saved == null || BootSets.identify(live, listOf(saved))?.id != "android") {
-            record(ctx, "Android: snapshot completed but verification did not match live images.")
-            return false
-        }
-        Prefs(ctx).clearTileCache()
-        return true
-    }
 }

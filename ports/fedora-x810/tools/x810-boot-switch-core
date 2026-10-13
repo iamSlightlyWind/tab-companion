@@ -3,6 +3,7 @@
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -92,6 +93,61 @@ def current_system():
     """
     return 'fedora' if read_os_release_id() == 'fedora' else 'mixed/unknown'
 
+def snapshot_current_fedora():
+    """Copy the live Fedora boot set into Linuxroot before switching away.
+
+    This deliberately does not inspect image signatures or compare hashes:
+    it preserves the exact four bytesets currently running, including local
+    kernel/boot customizations. Device identity and partition geometry remain
+    checked by validate_device() before this function is called.
+    """
+    BASE.mkdir(parents=True, exist_ok=True)
+    stage = BASE / '.fedora-snapshot-pending'
+    destination = BASE / 'fedora'
+    previous = BASE / '.fedora-snapshot-previous'
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir(mode=0o700)
+    try:
+        for part, size in PARTS.items():
+            source = device_path(part)
+            target = stage / f'{part}.img'
+            copied = 0
+            with open(source, 'rb', buffering=0) as src, open(target, 'wb', buffering=0) as dst:
+                while copied < size:
+                    block = src.read(min(4 * 1024 * 1024, size - copied))
+                    if not block:
+                        raise RuntimeError(f'{part}: short read while saving the current boot image')
+                    dst.write(block)
+                    copied += len(block)
+                dst.flush()
+                os.fsync(dst.fileno())
+            emit(f'Saved current {part} to shared Linuxroot storage')
+        (stage / 'name.txt').write_text('Fedora\n', encoding='utf-8')
+        dir_fd = os.open(stage, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+        shutil.rmtree(previous, ignore_errors=True)
+        if destination.exists():
+            os.replace(destination, previous)
+        try:
+            os.replace(stage, destination)
+        except Exception:
+            if not destination.exists() and previous.exists():
+                os.replace(previous, destination)
+            raise
+        shutil.rmtree(previous, ignore_errors=True)
+        parent_fd = os.open(BASE, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+
 def same_bytes(source, target, size):
     """Verify a completed raw write by direct comparison, without a digest."""
     with open(source, 'rb', buffering=0) as src, open(target, 'rb', buffering=0) as dst:
@@ -122,6 +178,10 @@ def stage(name):
         raise RuntimeError('Choose android or fedora')
     validate_device()
     validate_images(name)
+    if name == 'android':
+        # Both Android and Fedora boot-switch apps use the same ext4 store on
+        # the linuxroot partition; no SD card or /sdcard access is required.
+        snapshot_current_fedora()
     for part, size in PARTS.items():
         image = BASE / name / f'{part}.img'
         dest = device_path(part)

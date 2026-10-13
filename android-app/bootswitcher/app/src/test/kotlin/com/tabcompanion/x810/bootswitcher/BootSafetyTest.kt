@@ -25,6 +25,7 @@ class BootSafetyTest {
     @Test fun recoverySupportArchiveIsNeverDiscoveredAsABootSet() {
         assertFalse(BootSets.isBootSetId("recovery"))
         assertFalse(BootSets.isBootSetId("Recovery"))
+        assertFalse(BootSets.isBootSetId("rejected-20261006094100"))
         assertTrue(BootSets.isBootSetId("android"))
         assertTrue(BootSets.isBootSetId("fedora"))
         assertFalse(BootSets.isBootSetId("../android"))
@@ -37,16 +38,10 @@ class BootSafetyTest {
         assertFalse(BootSets.canBootstrapAndroid(listOf(linux, rootedAndroid), live(rootedAndroid)))
     }
 
-    @Test fun staleManualAndroidSetIsNotTrustedAndLinuxrootWinsItsDuplicateId() {
-        val staleManual = set("android", "c".repeat(64), "/sdcard/BootSets/android")
-        assertNotEquals(live(android), live(staleManual))
-        assertTrue(BootSets.canBootstrapAndroid(listOf(linux, staleManual), live(android)))
-        assertEquals(BootSets.LINUX_SETS,
-            BootSets.preferSetBase("/sdcard/BootSets", BootSets.LINUX_SETS))
-        assertEquals(BootSets.LINUX_SETS,
-            BootSets.preferSetBase(BootSets.LINUX_SETS, "/sdcard/BootSets"))
-        val unknownAndroid = set("old_oneui", "d".repeat(64), "/sdcard/BootSets/old_oneui")
-        assertFalse(BootSets.canBootstrapAndroid(listOf(linux, staleManual, unknownAndroid), live(android)))
+    @Test fun fixedSystemIdsCannotBeMislabelledByStaleSnapshotMetadata() {
+        assertEquals("Fedora", BootSets.labelFor("fedora", "Fedora 44"))
+        assertEquals("Android", BootSets.labelFor("android", "Fedora"))
+        assertEquals("LineageOS", BootSets.labelFor("lineage", "Fedora"))
     }
 
     @Test fun staleStockAndroidSetAfterMagiskPatchIsAChangedAndroidSnapshot() {

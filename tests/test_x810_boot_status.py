@@ -63,6 +63,7 @@ class BootStatusTests(unittest.TestCase):
             dest.write_bytes(b"----")
         with patch.object(core, "BASE", self.base), patch.object(core, "PARTS", self.parts), \
                 patch.object(core, "validate_device"), \
+                patch.object(core, "snapshot_current_fedora") as snapshot, \
                 patch.object(core, "device_path", side_effect=lambda part: destinations[part]), \
                 patch.object(core.os, "sync"):
             core.stage("android")
@@ -70,6 +71,33 @@ class BootStatusTests(unittest.TestCase):
         for part in self.parts:
             self.assertEqual(destinations[part].read_bytes(),
                              (self.base / "android" / f"{part}.img").read_bytes())
+        snapshot.assert_called_once_with()
+
+    def test_switching_away_snapshots_exact_live_fedora_images_without_fingerprint_validation(self):
+        test_parts = {part: 64 for part in self.parts}
+        live = {part: (b"custom-kernelsu-or-local-" + part.encode()).ljust(size, b"!")
+                for part, size in test_parts.items()}
+        current = self.base / "current"
+        current.mkdir()
+        devices = {}
+        for part, data in live.items():
+            device = current / part
+            device.write_bytes(data)
+            devices[part] = device
+        destination = self.base / "sets"
+        old = destination / "fedora"
+        old.mkdir(parents=True)
+        (old / "boot.img").write_bytes(b"stale image")
+
+        with patch.object(core, "BASE", destination), patch.object(core, "PARTS", test_parts), \
+                patch.object(core, "device_path", side_effect=lambda part: devices[part]), \
+                patch.object(core, "emit"):
+            core.snapshot_current_fedora()
+
+        for part, data in live.items():
+            self.assertEqual((destination / "fedora" / f"{part}.img").read_bytes(), data)
+        self.assertEqual((destination / "fedora" / "name.txt").read_text(), "Fedora\n")
+        self.assertFalse((destination / "fedora" / "manifest.json").exists())
 
 
 if __name__ == "__main__":

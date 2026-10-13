@@ -19,10 +19,11 @@ object BootState {
 
     @Synchronized
     fun read(context: Context, allowBootstrap: Boolean = false): Snapshot = synchronized(BootSets) {
+        BootMaintenance.initialize(context)
         BootMaintenance.recoverInterrupted()
         var sets = BootSets.discover()
         val live = BootSets.liveHashes()
-        BootMaintenance.refresh(context, sets, live, allowBootstrap = allowBootstrap)
+        BootMaintenance.refresh(context, sets, live, allowBootstrap)
         sets = BootSets.discover()
         val name = BootSets.runningSystemName()
         val running = BootSets.runningAndroid(sets, name)
@@ -30,6 +31,8 @@ object BootState {
         // This Android application cannot be running Fedora. Image hashes only
         // describe the next boot, and name.txt may have been stamped by Linux.
         Prefs(context).clearStaged()
+        // Existing snapshots are changed only immediately before a switch;
+        // refresh() above captures Android here only when seeding first-run.
         return@synchronized Snapshot(shown, running, BootSets.identify(live, shown))
     }
 

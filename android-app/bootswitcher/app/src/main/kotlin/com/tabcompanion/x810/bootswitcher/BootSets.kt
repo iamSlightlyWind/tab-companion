@@ -3,9 +3,8 @@ package com.tabcompanion.x810.bootswitcher
 /**
  * Switching systems on this tablet means replacing four partitions.
  *
- * The sets are discovered rather than hardcoded: every directory under
- * [ROOT_DIR] that holds the four images is a system the tablet can boot, so
- * adding LineageOS is dropping a folder in, not editing this file.
+ * System sets live on the shared Linuxroot ext4 partition, which both Android
+ * and Fedora can access. Quarantined snapshots are not selectable systems.
  *
  * `vbmeta` is deliberately not in the list.  One UI runs fine with the
  * unsigned flags=2 vbmeta that Fedora needs, so it never has to change — and
@@ -72,28 +71,15 @@ object BootSets {
         fun file(part: Partition): String = "$dir/${part.name}.img"
     }
 
-    /**
-     * The two places a set can live.
-     *
-     * The installer seeds the sets inside Fedora's own root filesystem, and
-     * that partition is plain ext4 that root can mount from here — the app
-     * already does it to read Fedora's name.  So there is nothing to copy:
-     * Android reads the same images Fedora uses. BootMaintenance also seeds or
-     * refreshes the Android set there after root is granted, with a verified
-     * directory transaction.
-     *
-     * `/sdcard/BootSets` is a manual import/addition location. The owner can
-     * copy a complete BootSets folder from microSD into Android's shared
-     * storage while Android is running; recovery access to encrypted shared
-     * storage is not assumed.
-     */
-    const val ROOT_DIR = "/sdcard/BootSets"
+    /** Shared ext4 location inside linuxroot; Android and Fedora both access it. */
     const val LINUX_MOUNT = "/mnt/x810-linuxroot"
     const val LINUX_SETS = "$LINUX_MOUNT/var/lib/x810-boot-sets"
 
     /** Reject support-asset folders and unsafe names from either set root. */
     internal fun isBootSetId(id: String): Boolean =
-        id.matches(Regex("[A-Za-z0-9_-]{1,64}")) && !id.equals("recovery", ignoreCase = true)
+        id.matches(Regex("[A-Za-z0-9_-]{1,64}")) &&
+            !id.equals("recovery", ignoreCase = true) &&
+            !id.startsWith("rejected-", ignoreCase = true)
 
     /**
      * Mounts Fedora's root read-only, if it is not mounted already.
@@ -128,6 +114,7 @@ object BootSets {
      */
     private val KNOWN_LABELS = mapOf(
         "fedora" to "Fedora",
+        "android" to "Android",
         "oneui" to "Android",
         "lineage" to "LineageOS",
         "lineageos" to "LineageOS",
@@ -183,23 +170,18 @@ object BootSets {
     }
 
     /**
-     * Every set the tablet can see, from either place.
-     *
-     * Android shared storage is read first and Fedora's Linuxroot set second,
-     * so a verified Linuxroot Android snapshot wins over a stale manual copy
-     * with the same id. A manual directory can still add a set when absent
-     * from Linuxroot.
+     * Only discover the shared Linuxroot directory. Do not depend on an SD
+     * card or Android's encrypted /sdcard, and never surface quarantined
+     * `rejected-*` snapshots as selectable operating systems.
      */
     fun discover(): List<BootSet> {
         mountLinuxRoot()
 
         val where = LinkedHashMap<String, String>()
-        for (base in listOf(ROOT_DIR, LINUX_SETS)) {
-            Root.run("ls -1 $base 2>/dev/null || true").output.lineSequence()
-                .map { it.trim() }
-                .filter(::isBootSetId)
-                .forEach { id -> where[id] = preferSetBase(where[id], base) }
-        }
+        Root.run("ls -1 $LINUX_SETS 2>/dev/null || true").output.lineSequence()
+            .map { it.trim() }
+            .filter(::isBootSetId)
+            .forEach { id -> where[id] = LINUX_SETS }
 
         return where.keys.sorted().map { id ->
             val dir = "${where[id]}/$id"
@@ -207,7 +189,9 @@ object BootSets {
             val hashes = hashesOf(dir)
             BootSet(
                 id = id,
-                label = readLabel(dir) ?: fallback,
+                // A stale name.txt in a quarantined/old set must never make
+                // Android appear to be a second Fedora entry (or vice versa).
+                label = labelFor(id, readLabel(dir)),
                 complete = hashes.size == PARTITIONS.size,
                 hashes = hashes,
                 dir = dir,
@@ -267,9 +251,10 @@ object BootSets {
             PARTITIONS.all { part -> live[part.device]?.matches(Regex("[0-9a-f]{64}")) == true }
     }
 
-    /** Prefer Linuxroot's verified snapshot over a duplicate shared-storage id. */
-    internal fun preferSetBase(current: String?, candidate: String): String =
-        if (candidate == LINUX_SETS || current == null) candidate else current
+    internal fun labelFor(id: String, stored: String?): String {
+        val canonical = KNOWN_LABELS[id.lowercase()]
+        return canonical ?: stored ?: id.replaceFirstChar { it.uppercase() }
+    }
 
     fun backupDecision(sets: List<BootSet>, live: Map<String, String>): BackupDecision {
         val android = sets.filterNot { isLinux(it) }.singleOrNull()
