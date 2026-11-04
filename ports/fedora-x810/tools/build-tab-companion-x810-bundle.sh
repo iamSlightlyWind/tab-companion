@@ -32,6 +32,8 @@ install -m 0755 usr/libexec/tab-companion-swap-priority \
     "$stage/usr/libexec/tab-companion-swap-priority"
 install -m 0755 usr/libexec/tab-companion-thermal-setting \
     "$stage/usr/libexec/tab-companion-thermal-setting"
+install -m 0755 tools/tab-companion-performance-setting \
+    "$stage/usr/libexec/tab-companion-performance-setting"
 install -m 0755 usr/libexec/tab-companion-browser-memory-setting \
     "$stage/usr/libexec/tab-companion-browser-memory-setting"
 install -m 0755 usr/libexec/tab-companion-browser-memory-agent \

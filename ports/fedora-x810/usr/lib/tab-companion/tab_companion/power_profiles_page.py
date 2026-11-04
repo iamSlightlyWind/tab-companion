@@ -19,6 +19,7 @@ from .zram import (
     parse_configured_size,
 )
 from .thermal_limit import MAX_THRESHOLD_C, MIN_THRESHOLD_C, read_settings, read_status
+from .power_profile_tuning import read_settings as read_power_tuning_settings
 from .browser_memory import (
     MAX_LIMIT_DECI_GB,
     MIN_LIMIT_DECI_GB,
@@ -30,6 +31,7 @@ HELPER = "/usr/libexec/tab-companion-power-profile"
 ZRAM_HELPER = "/usr/libexec/tab-companion-zram-size"
 SWAP_HELPER = "/usr/libexec/tab-companion-swap-priority"
 THERMAL_HELPER = "/usr/libexec/tab-companion-thermal-setting"
+PERFORMANCE_TUNING_HELPER = "/usr/libexec/tab-companion-performance-setting"
 BROWSER_MEMORY_HELPER = "/usr/libexec/tab-companion-browser-memory-setting"
 SERVICE = "net.hadess.PowerProfiles"
 OBJECT = "/net/hadess/PowerProfiles"
@@ -106,16 +108,77 @@ class PowerProfilesPage(Adw.PreferencesPage):
         self.status_row.add_suffix(refresh)
         self.add(group)
 
+        self.tuning_group = None
+        if os.path.isfile(PERFORMANCE_TUNING_HELPER):
+            self._tuning_saved = read_power_tuning_settings()
+            self._tuning_profile_id = "balanced"
+            balanced = self._tuning_saved["profiles"]["balanced"]
+            self.tuning_group = Adw.PreferencesGroup(
+                title=_("Profile tuning"),
+                description=_("Set the maximum CPU and GPU level for each power mode. Lower values reduce heat; kernel thermal protection remains active."),
+            )
+            self.tuning_row = Adw.ActionRow(title=_("Maximum CPU/GPU level"))
+            self.tuning_adjustment = Gtk.Adjustment.new(
+                balanced["max_percent"], 30, 100, 5, 10, 0
+            )
+            self.tuning_adjustment.connect("value-changed", self._tuning_value_changed)
+            self.tuning_scale = Gtk.Scale.new(Gtk.Orientation.HORIZONTAL, self.tuning_adjustment)
+            self.tuning_scale.set_draw_value(False)
+            self.tuning_scale.set_digits(0)
+            self.tuning_scale.set_round_digits(0)
+            self.tuning_scale.set_hexpand(True)
+            self.tuning_scale.set_valign(Gtk.Align.CENTER)
+            self.tuning_scale.set_vexpand(False)
+            self.tuning_editor = Gtk.SpinButton.new(self.tuning_adjustment, 1, 0)
+            self.tuning_editor.set_numeric(True)
+            self.tuning_editor.set_width_chars(3)
+            self.tuning_editor.set_valign(Gtk.Align.CENTER)
+            self.tuning_editor.set_vexpand(False)
+            self.tuning_units = Gtk.Label(label="%")
+            tuning_controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            tuning_controls.set_hexpand(True)
+            tuning_controls.set_valign(Gtk.Align.CENTER)
+            tuning_controls.set_vexpand(False)
+            tuning_controls.append(self.tuning_scale)
+            tuning_controls.append(self.tuning_editor)
+            tuning_controls.append(self.tuning_units)
+            self.tuning_row.add_suffix(tuning_controls)
+            self.tuning_group.add(self.tuning_row)
+
+            self.cpu_boost_row = Adw.SwitchRow(
+                title=_("CPU boost"),
+                subtitle=_("Allow this profile to use the CPU's highest frequency states."),
+            )
+            self.cpu_boost_row.set_active(balanced["cpu_boost"])
+            self.cpu_boost_row.connect("notify::active", self._tuning_value_changed)
+            self.tuning_group.add(self.cpu_boost_row)
+
+            self.gpu_boost_row = Adw.SwitchRow(
+                title=_("GPU boost"),
+                subtitle=_("Allow this profile to use the GPU's highest frequency states."),
+            )
+            self.gpu_boost_row.set_active(balanced["gpu_boost"])
+            self.gpu_boost_row.connect("notify::active", self._tuning_value_changed)
+            self.tuning_group.add(self.gpu_boost_row)
+
+            self.tuning_status_row = Adw.ActionRow(title=_("Profile tuning status"))
+            self.tuning_apply_button = Gtk.Button(label=_("Apply"), valign=Gtk.Align.CENTER)
+            self.tuning_apply_button.connect("clicked", self._save_tuning_settings)
+            self.tuning_status_row.add_suffix(self.tuning_apply_button)
+            self.tuning_group.add(self.tuning_status_row)
+            self.add(self.tuning_group)
+            self._tuning_timer = GLib.timeout_add_seconds(2, self._refresh_tuning_status)
+
         self.thermal_group = None
         if os.path.isfile(THERMAL_HELPER):
             self._thermal_saved = read_settings()
             self.thermal_group = Adw.PreferencesGroup(
                 title=_("SoC temperature limit"),
-                description=_("Reduce CPU frequency when the hottest SoC sensor stays above the limit. Kernel thermal protection remains active."),
+                description=_("Reduce CPU and GPU frequency when the hottest SoC sensor stays above the limit. Kernel thermal protection remains active."),
             )
             self.thermal_enabled_row = Adw.SwitchRow(
-                title=_("Temperature-based CPU limit"),
-                subtitle=_("Cap CPU policy maximums at 80% while hot."),
+                title=_("Temperature-based performance limit"),
+                subtitle=_("Temporarily cap CPU and GPU performance while hot."),
             )
             self.thermal_enabled_row.set_active(self._thermal_saved["enabled"])
             self.thermal_enabled_row.connect("notify::active", self._thermal_value_changed)
@@ -281,6 +344,121 @@ class PowerProfilesPage(Adw.PreferencesPage):
             self.add(swap_group)
         self.refresh()
 
+    def _tuning_selected(self):
+        if self.tuning_group is None:
+            return None
+        profiles = {
+            name: dict(settings)
+            for name, settings in self._tuning_saved["profiles"].items()
+        }
+        profiles[self._tuning_profile_id] = {
+            "max_percent": round(self.tuning_adjustment.get_value()),
+            "cpu_boost": self.cpu_boost_row.get_active(),
+            "gpu_boost": self.gpu_boost_row.get_active(),
+        }
+        return {"version": 1, "profiles": profiles}
+
+    def _load_tuning_profile(self, profile_id):
+        if self.tuning_group is None:
+            return
+        if profile_id not in self._tuning_saved["profiles"]:
+            profile_id = "balanced"
+        self._tuning_profile_id = profile_id
+        value = self._tuning_saved["profiles"][profile_id]
+        self._updating = True
+        self.tuning_adjustment.set_value(value["max_percent"])
+        self.cpu_boost_row.set_active(value["cpu_boost"])
+        self.gpu_boost_row.set_active(value["gpu_boost"])
+        self._updating = False
+        self._tuning_value_changed()
+        self._refresh_tuning_status()
+
+    def _tuning_value_changed(self, *_args):
+        if self.tuning_group is None or self._updating:
+            return
+        selected = self._tuning_selected()
+        self.tuning_apply_button.set_sensitive(selected != self._tuning_saved)
+        if selected != self._tuning_saved:
+            self.tuning_status_row.set_subtitle(
+                _("Unsaved changes for {profile}.").format(
+                    profile=dict(PROFILES).get(self._tuning_profile_id, self._tuning_profile_id)
+                )
+            )
+
+    def _save_tuning_settings(self, *_args):
+        selected = self._tuning_selected()
+        if selected is None or selected == self._tuning_saved:
+            return
+        self.tuning_apply_button.set_sensitive(False)
+        self.tuning_status_row.set_subtitle(_("Saving profile limits…"))
+        try:
+            self._tuning_process = Gio.Subprocess.new(
+                admin_command(
+                    "performance-tuning", PERFORMANCE_TUNING_HELPER,
+                    json.dumps(selected, separators=(",", ":")),
+                ),
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+            )
+            self._tuning_process.communicate_utf8_async(
+                None, None, self._tuning_save_finished, selected
+            )
+        except (GLib.Error, OSError):
+            self.tuning_status_row.set_subtitle(
+                _("Could not save profile limits; previous settings remain.")
+            )
+            self._tuning_value_changed()
+
+    def _tuning_save_finished(self, process, result, selected):
+        try:
+            success, _stdout, stderr = process.communicate_utf8_finish(result)
+        except (GLib.Error, TypeError, ValueError):
+            success, stderr = False, ""
+        if not success or not process.get_successful():
+            self.tuning_status_row.set_subtitle(
+                (stderr or _("Could not save profile limits; previous settings remain.")).strip()
+            )
+            self._tuning_value_changed()
+            return
+        self._tuning_saved = selected
+        self.tuning_apply_button.set_sensitive(False)
+        self.tuning_status_row.set_subtitle(
+            _("Saved for {profile}; the CPU and GPU limits apply shortly.").format(
+                profile=dict(PROFILES).get(self._tuning_profile_id, self._tuning_profile_id)
+            )
+        )
+
+    def _refresh_tuning_status(self):
+        if self.tuning_group is None:
+            return GLib.SOURCE_REMOVE
+        if self._tuning_selected() != self._tuning_saved:
+            self.tuning_status_row.set_subtitle(
+                _("Unsaved changes for {profile}.").format(
+                    profile=dict(PROFILES).get(self._tuning_profile_id, self._tuning_profile_id)
+                )
+            )
+            return GLib.SOURCE_CONTINUE
+        status = read_status()
+        if status is None or status.get("profile") not in PROFILE_INDEX:
+            self.tuning_status_row.set_subtitle(
+                _("Saved settings; waiting for the system performance service.")
+            )
+            return GLib.SOURCE_CONTINUE
+        profile = status["profile"]
+        name = dict(PROFILES)[profile]
+        maximum = status.get("max_percent", self._tuning_saved["profiles"][profile]["max_percent"])
+        cpu = _("on") if status.get("cpu_boost") else _("off")
+        gpu = _("on") if status.get("gpu_boost") else _("off")
+        gpu_max = status.get("gpu_max_mhz")
+        gpu_text = _("GPU boost {state}").format(state=gpu)
+        if type(gpu_max) in (int, float) and gpu_max > 0:
+            gpu_text += _(" · GPU max {value:.0f} MHz").format(value=gpu_max)
+        self.tuning_status_row.set_subtitle(
+            _("{profile} · CPU/GPU ceiling {maximum}% · CPU boost {cpu} · {gpu}").format(
+                profile=name, maximum=maximum, cpu=cpu, gpu=gpu_text
+            )
+        )
+        return GLib.SOURCE_CONTINUE
+
     def _thermal_selected(self):
         return {
             "enabled": self.thermal_enabled_row.get_active(),
@@ -445,6 +623,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
         self._active = profile
         self.mode_row.set_selected(PROFILE_INDEX[profile])
         self.mode_row.set_sensitive(True)
+        self._load_tuning_profile(profile)
         self.status_row.set_subtitle(self._profile_status(profile))
         self._updating = False
         self._refresh_zram()
@@ -633,6 +812,13 @@ class PowerProfilesPage(Adw.PreferencesPage):
         profile_id = PROFILES[selected][0]
         if profile_id == self._active:
             return
+        if (self.tuning_group is not None and self._active in PROFILE_INDEX
+                and self._tuning_selected() != self._tuning_saved):
+            self._updating = True
+            row.set_selected(PROFILE_INDEX[self._active])
+            self._updating = False
+            self.tuning_status_row.set_subtitle(_("Apply profile changes before switching modes."))
+            return
 
         row.set_sensitive(False)
         self.status_row.set_subtitle(_("Authorizing profile change…"))
@@ -659,6 +845,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
         self.mode_row.set_selected(PROFILE_INDEX[profile_id])
         self._updating = False
         self.mode_row.set_sensitive(True)
+        self._load_tuning_profile(profile_id)
         self.status_row.set_subtitle(self._profile_status(profile_id))
         # TuneD applies the selected profile asynchronously. Read back both
         # the PPD selection and CPUFreq governor rather than implying that a
@@ -675,6 +862,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
         self.mode_row.set_selected(PROFILE_INDEX[actual_profile])
         self._updating = False
         self.mode_row.set_sensitive(True)
+        self._load_tuning_profile(actual_profile)
         self.status_row.set_subtitle(self._profile_status(actual_profile))
         return GLib.SOURCE_REMOVE
 
@@ -684,4 +872,5 @@ class PowerProfilesPage(Adw.PreferencesPage):
             self.mode_row.set_selected(PROFILE_INDEX[self._active])
         self._updating = False
         self.mode_row.set_sensitive(True)
+        self._load_tuning_profile(self._active or "balanced")
         self.status_row.set_subtitle(_("Change cancelled or unavailable; the previous profile remains active."))

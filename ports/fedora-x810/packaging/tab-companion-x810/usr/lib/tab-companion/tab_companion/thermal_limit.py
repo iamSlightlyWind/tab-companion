@@ -45,4 +45,19 @@ def read_status(path: Path = STATUS_PATH) -> dict | None:
         number = value.get(key)
         if number is not None and (type(number) not in (int, float) or not 0 <= number <= 200):
             return None
+    profile = value.get("profile")
+    if profile is not None and profile not in ("power-saver", "balanced", "performance"):
+        return None
+    maximum = value.get("max_percent")
+    if maximum is not None and (type(maximum) is not int or not 30 <= maximum <= 100):
+        return None
+    for key in ("cpu_boost", "gpu_boost"):
+        if key in value and type(value[key]) is not bool:
+            return None
+    applied_boost = value.get("cpu_boost_applied")
+    if applied_boost is not None and type(applied_boost) is not bool:
+        return None
+    gpu_max = value.get("gpu_max_mhz")
+    if gpu_max is not None and (type(gpu_max) not in (int, float) or not 0 <= gpu_max <= 1000):
+        return None
     return value

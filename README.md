@@ -77,6 +77,14 @@ integrity checks. Select a build number to restore its four boot images and
 matching kernel modules; the privileged helper revalidates the snapshot,
 requires authentication, reads back every partition write, and never reboots.
 
+On Fedora SM-X810, **Performance** includes per-mode CPU/GPU tuning. Set a
+maximum CPU/GPU frequency level from 30% to 100%, and enable or disable CPU
+and GPU boost separately for Power Saver, Balanced, and Performance. The
+X810 thermal service applies these saved limits while the app is closed; when
+the configured SoC temperature limit is exceeded, it temporarily lowers both
+CPU and GPU ceilings. Balanced starts at a 75% ceiling with boost disabled to
+reduce heat, and can be tuned further on the tablet.
+
 ## Reinstall or roll back
 
 To repair/update an existing install, repeat **Install once** and install the
