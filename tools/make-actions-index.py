@@ -89,13 +89,21 @@ def pacman_package_fields(path):
     values = {}
     try:
         with tarfile.open(fileobj=decoder.stdout, mode="r|") as archive:
-            matches = [member for member in archive if member.name == ".PKGINFO"]
-            if len(matches) != 1 or not matches[0].isfile():
+            metadata = None
+            for member in archive:
+                if member.name != ".PKGINFO":
+                    continue
+                if metadata is not None or not member.isfile():
+                    fail("Arch package must contain exactly one regular .PKGINFO")
+                stream = archive.extractfile(member)
+                if stream is None:
+                    fail("Could not read Arch package metadata")
+                metadata = stream.read(64 * 1024 + 1)
+                if len(metadata) > 64 * 1024:
+                    fail("Arch package .PKGINFO is unexpectedly large")
+            if metadata is None:
                 fail("Arch package must contain exactly one regular .PKGINFO")
-            stream = archive.extractfile(matches[0])
-            if stream is None:
-                fail("Could not read Arch package metadata")
-            for line in stream.read(64 * 1024).decode("utf-8").splitlines():
+            for line in metadata.decode("utf-8").splitlines():
                 key, separator, value = line.partition(" = ")
                 if separator and key in {"pkgname", "pkgver", "arch"}:
                     if key in values:

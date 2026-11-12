@@ -1,6 +1,8 @@
 import importlib.util
+import io
 import json
 import os
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,6 +51,30 @@ class PackageFieldCommandTests(unittest.TestCase):
             INDEX.fields(["dpkg-deb", "-f", "Package"], Path("x.deb"))
         with self.assertRaisesRegex(SystemExit, "exactly one"):
             INDEX.fields(["rpm", "{archive}", "{archive}"], Path("x.rpm"))
+
+    def test_arch_metadata_is_read_during_streaming_tar_iteration(self):
+        contents = b"pkgname = tab-companion\npkgver = 1.4.2-1000007\narch = any\n"
+        tar_data = io.BytesIO()
+        with tarfile.open(fileobj=tar_data, mode="w") as archive:
+            metadata = tarfile.TarInfo(".PKGINFO")
+            metadata.size = len(contents)
+            archive.addfile(metadata, io.BytesIO(contents))
+            later = tarfile.TarInfo("usr/share/tab-companion/marker")
+            later.size = 1
+            archive.addfile(later, io.BytesIO(b"x"))
+
+        class Decoder:
+            def __init__(self, stream):
+                self.stdout = stream
+
+            def wait(self):
+                return 0
+
+        package = Path("/tmp/tab-companion.pkg.tar.zst")
+        with patch.object(INDEX.subprocess, "Popen", return_value=Decoder(io.BytesIO(tar_data.getvalue()))) as run:
+            values = INDEX.pacman_package_fields(package)
+        run.assert_called_once_with(["zstd", "-q", "-dc", str(package)], stdout=INDEX.subprocess.PIPE)
+        self.assertEqual(values, ("tab-companion", "1.4.2-1000007", "any"))
 
 
 class BuildIndexSelectionTests(unittest.TestCase):
