@@ -5,16 +5,14 @@ import hashlib
 import os
 import subprocess
 import threading
-from pathlib import Path
 
 from gi.repository import Adw, Gdk, GLib, Gtk
 
 from . import VERSION
 from .admin_auth import command as admin_command
-from .aur import build_aur_package
 from .i18n import _
+from .platform_backend import detect_backend
 from .updates import (
-    APP_BUILD_ARTIFACTS,
     APP_PROJECT,
     APP_REPO,
     UpdateConfig,
@@ -26,25 +24,15 @@ from .updates import (
     host_target,
     installed_build_info,
     installed_port_version,
-    parse_os_release,
-    package_manager,
 )
 
 INSTALL_HELPER = "/usr/libexec/tab-companion-install-package"
 
 
-def legacy_ubuntu_update_available():
-    """Keep the upstream APT/dpkg X910 update UI available on its target only."""
-    if parse_os_release().get("ID", "").lower() != "ubuntu":
-        return False
-    try:
-        model = Path("/proc/device-tree/model").read_bytes().rstrip(b"\0").decode()
-    except OSError:
-        return False
-    return (
-        model == "Samsung Galaxy Tab S9 Ultra Wi-Fi"
-        and os.path.isfile("/usr/libexec/tab-companion-update")
-    )
+def legacy_update_available():
+    """Use the installed port's backend capability for its legacy updater UI."""
+    backend = detect_backend()
+    return backend.has_legacy_update_ui(get_port_record())
 
 
 class UpdatesPage(Adw.PreferencesPage):
@@ -58,7 +46,8 @@ class UpdatesPage(Adw.PreferencesPage):
         self.config = UpdateConfig()
         self.record = get_port_record()
         self.target = host_target()
-        self.manager = package_manager()
+        self.backend = detect_backend()
+        self.manager = self.backend.package_manager
         self.sources = {}
         # Keep these secondary actions visually compact without shrinking
         # the surrounding preference rows or changing their labels.
@@ -78,25 +67,18 @@ class UpdatesPage(Adw.PreferencesPage):
             default_repo=APP_REPO,
             workflow_file="build-updates.yml",
             branch="main",
-            artifact_name=APP_BUILD_ARTIFACTS.get(self.manager, "tab-companion-fedora"),
+            artifact_name=self.backend.app_artifact or "tab-companion-fedora",
             public_release=True,
             release_tag_prefix="tab-companion-build",
             build_info_path="/usr/share/tab-companion/app-build.json",
             version=VERSION,
             description=_("Update the companion app without changing the installed Linux port."),
         )
-        # Ubuntu X910 already has the upstream APT/dpkg offline port updater;
-        # keep it as the system channel instead of showing a second generic
-        # port feed that would not understand its legacy update format.
-        if not legacy_ubuntu_update_available():
+        has_port_updater = self.backend.has_port_update(self.record)
+        has_x810_kernel_updater = self.backend.has_kernel_update(self.target, self.record)
+        if has_port_updater:
             port_id = self.record.get("port_id") or ""
             port_repo = self.record.get("repo_url") or ""
-            port_version = installed_port_version(self.record)
-            has_x810_kernel_updater = (
-                self.manager == "rpm"
-                and self.target.get("device") == "SM-X810"
-                and port_id == "x810-fedora"
-            )
             self._build_source(
                 key="port",
                 title=self.record.get("name", _("Linux port")),
@@ -110,19 +92,18 @@ class UpdatesPage(Adw.PreferencesPage):
                     "release_tag_prefix", f"{port_id}-build"
                 ),
                 build_info_path=self.record.get("build_info_path", "/usr/share/tab-companion/port-build.json"),
-                version=port_version,
+                version=installed_port_version(self.record),
                 description=(
-                    _("Update the Fedora port support package. Kernel and boot-image updates use the guarded X810 updater below.")
+                    _("Update the Linux port support package. Kernel and boot-image updates use the guarded X810 updater below.")
                     if has_x810_kernel_updater
                     else _("Update the Linux port packages. Kernel and boot images remain manual TWRP updates.")
                 ),
             )
-            if has_x810_kernel_updater:
-                from .x810_kernel_update_page import X810KernelUpdateSection
-                self.add(X810KernelUpdateSection(self.target))
+        if has_x810_kernel_updater:
+            from .x810_kernel_update_page import X810KernelUpdateSection
+            self.add(X810KernelUpdateSection(self.target))
         if not self.manager:
             self._set_status("app", _("No supported package manager was detected."))
-            self._set_status("port", _("No supported package manager was detected."))
 
     def _build_source(self, *, key, title, project, default_repo, workflow_file, branch,
                       artifact_name, build_info_path, version, description, public_release=False,
@@ -272,10 +253,9 @@ class UpdatesPage(Adw.PreferencesPage):
         body = _("Tab Companion will download the package from successful build #{number}, verify its SHA-256, then ask the system package manager to install it.").format(number=build.run_number)
         if asset.format == "rpm-transaction":
             body = _("Tab Companion will download the X810 Fedora update from successful build #{number}, verify the bundle and each RPM, then install the port and compositor packages in one DNF transaction. WARNING: the Mutter compositor update is experimental for HDR testing; it may affect your GNOME session and does not yet establish working HDR.").format(number=build.run_number)
-        if self.manager == "pacman":
-            body += "\n\n" + _("Arch Linux requires a full system upgrade before installing a local package; pacman will upgrade the system first.")
-        if asset.format == "aur-source":
-            body += "\n\n" + _("This AUR PKGBUILD runs as your logged-in user and can access your user files. Review the source if you do not trust this repository.")
+        install_notice = self.backend.install_notice()
+        if install_notice:
+            body += "\n\n" + _(install_notice)
         dialog = Adw.AlertDialog(heading=_("Install build #{number}?").format(number=build.run_number), body=body)
         dialog.add_response("cancel", _("Cancel"))
         dialog.add_response("install", _("Install"))
@@ -299,9 +279,6 @@ class UpdatesPage(Adw.PreferencesPage):
             try:
                 package = extract_verified_asset(build)
                 fmt = asset.format
-                if fmt == "aur-source":
-                    package = build_aur_package(package)
-                    fmt = "pacman-local"
                 if not os.path.isfile(INSTALL_HELPER):
                     raise UpdateError(_("The privileged package installer is not installed in this build."))
                 digest_obj = hashlib.sha256()

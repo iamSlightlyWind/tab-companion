@@ -20,7 +20,7 @@ validate it before use.
 2. Download the matching ZIP from the [latest build](https://github.com/iamSlightlyWind/tab-companion/releases/latest):
    `tab-companion-ubuntu.zip`, `tab-companion-fedora.zip`, or `tab-companion-arch.zip`.
    Extract it; it contains the package and its build index.
-3. Install the package matching your Linux distribution and tablet:
+3. Install the native package matching your Linux distribution and tablet:
 
    **Fedora (SM-X810):**
    ```sh
@@ -32,14 +32,17 @@ validate it before use.
    sudo apt install ./ubuntu-gts9u-companion_*.deb
    ```
 
-   **Arch:** extract `tab-companion-arch-source.tar.gz`, then run `makepkg -si`
-   as your normal user from the extracted directory (not as root).
+   **Arch:**
+   ```sh
+   sudo pacman -U ./tab-companion-*.pkg.tar.zst
+   ```
 
 Launch **Tab Companion** from the app grid or run `tab-companion`.
 For a text-only updater (for example from a terminal without a usable desktop), run
-`tab-companion --tui`. It exposes only the app update, Linux port package update,
-and on X810 the kernel/boot update plus cached fallback restore. It uses the same
-checksum checks and polkit helpers as the GUI; it does not reboot automatically.
+`tab-companion --tui`. It exposes the app update, port/kernel feeds declared by
+the installed port's capabilities, and any supported cached fallback restore.
+It uses the same checksum checks and polkit helpers as the GUI; it does not
+reboot automatically.
 
 ## Update
 
@@ -95,6 +98,7 @@ only the newest build. To roll back, use a previously saved package:
 - Ubuntu: `sudo apt install --allow-downgrades ./ubuntu-gts9u-companion_<older>_all.deb`
 - Arch: `sudo pacman -U ./tab-companion-<older>-any.pkg.tar.zst`
 
-Linux-port packages can use a separate update channel when their port provides
-its own compatible Actions build and metadata. The X810 kernel/boot channel is
-specific to Fedora SM-X810 and is not shown on other devices or distributions.
+Linux-port packages can use a separate update channel when their port metadata
+advertises a compatible package feed. The guarded X810 kernel/boot channel is
+enabled by the port's `kernel_update` capability and currently applies to
+Fedora SM-X810 only.

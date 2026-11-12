@@ -27,6 +27,7 @@ from tab_companion.updates import (
     installed_build_info,
     package_manager,
 )
+from tab_companion.platform_backend import backend_for_manager
 
 
 class MemoryResponse:
@@ -354,16 +355,10 @@ class UpdatesTests(unittest.TestCase):
                 patch("tab_companion.updates.device_id", return_value="SM-X810"), \
                 patch("tab_companion.updates.platform.machine", return_value="aarch64"):
             self.assertEqual(host_target(), self.target)
-        cases = (
-            ({"ID": "ubuntu"}, {"apt-get", "dpkg"}, "deb"),
-            ({"ID": "fedora"}, {"dnf5", "rpm"}, "rpm"),
-            ({"ID": "arch"}, {"pacman"}, "pacman"),
-        )
-        for release, installed, expected in cases:
-            with self.subTest(os_id=release["ID"]), \
-                    patch("tab_companion.updates.parse_os_release", return_value=release), \
-                    patch("tab_companion.updates.shutil.which",
-                          side_effect=lambda name, installed=installed: f"/usr/bin/{name}" if name in installed else None):
+        for expected in ("deb", "rpm", "pacman"):
+            with self.subTest(manager=expected), \
+                    patch("tab_companion.updates.detect_backend",
+                          return_value=backend_for_manager(expected)):
                 self.assertEqual(package_manager(), expected)
         self.assertTrue(asset_supported_by_manager(type("Asset", (), {"format": "rpm"})(), "rpm"))
         self.assertTrue(asset_supported_by_manager(

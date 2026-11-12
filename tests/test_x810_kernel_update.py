@@ -172,11 +172,12 @@ class X810ReleaseTests(unittest.TestCase):
 
 
 class X810KernelUiContractTests(unittest.TestCase):
-    def test_page_is_gated_to_fedora_x810_and_requires_backup_before_apply(self):
+    def test_page_uses_port_capability_and_requires_backup_before_apply(self):
         page = (Path(__file__).resolve().parents[1] / "src/tab_companion/updates_page.py").read_text()
-        self.assertIn('self.manager == "rpm"', page)
-        self.assertIn('self.target.get("device") == "SM-X810"', page)
-        self.assertIn('port_id == "x810-fedora"', page)
+        self.assertIn("self.backend.has_kernel_update(self.target, self.record)", page)
+        self.assertIn("self.backend.has_port_update(self.record)", page)
+        self.assertNotIn('self.manager == "rpm"', page)
+        self.assertNotIn('port_id == "x810-fedora"', page)
         kernel_page = (Path(__file__).resolve().parents[1] / "src/tab_companion/x810_kernel_update_page.py").read_text()
         self.assertIn("bool(self.release and self.backup_folder", kernel_page)
         self.assertIn('"apply"', kernel_page)

@@ -82,6 +82,35 @@ def aur_metadata(path):
     return values
 
 
+def pacman_package_fields(path):
+    """Read the single .PKGINFO from an Arch package without extracting it."""
+    decoder = subprocess.Popen(["zstd", "-q", "-dc", str(path)], stdout=subprocess.PIPE)
+    assert decoder.stdout is not None
+    values = {}
+    try:
+        with tarfile.open(fileobj=decoder.stdout, mode="r|") as archive:
+            matches = [member for member in archive if member.name == ".PKGINFO"]
+            if len(matches) != 1 or not matches[0].isfile():
+                fail("Arch package must contain exactly one regular .PKGINFO")
+            stream = archive.extractfile(matches[0])
+            if stream is None:
+                fail("Could not read Arch package metadata")
+            for line in stream.read(64 * 1024).decode("utf-8").splitlines():
+                key, separator, value = line.partition(" = ")
+                if separator and key in {"pkgname", "pkgver", "arch"}:
+                    if key in values:
+                        fail(f"Arch package has duplicate {key} metadata")
+                    values[key] = value
+    finally:
+        decoder.stdout.close()
+    if decoder.wait() != 0:
+        fail("Could not decompress Arch package metadata")
+    required = ("pkgname", "pkgver", "arch")
+    if any(not values.get(key) for key in required):
+        fail("Arch package metadata is incomplete")
+    return tuple(values[key] for key in required)
+
+
 def main():
     if len(sys.argv) != 3 or sys.argv[2] not in ("ubuntu", "fedora", "arch"):
         fail("Usage: tools/make-actions-index.py BUILD_DIRECTORY ubuntu|fedora|arch")
@@ -141,11 +170,12 @@ def main():
             "os_id": "fedora", "os_version": "44", "arch": "aarch64", "device": "SM-X810",
         }))
     else:
-        aur = one(root, "tab-companion-arch-source.tar.gz")
-        aur_values = aur_metadata(aur)
-        assets.append(asset(aur, "aur-source", aur_values["pkgname"],
-                            f"{aur_values['pkgver']}-{aur_values['pkgrel']}", {
-            "os_id": "arch", "os_version": "*", "arch": "aarch64", "device": "SM-X810",
+        package = one(root, "*.pkg.tar.zst")
+        package_name, package_version, package_arch = pacman_package_fields(package)
+        if package_name != "tab-companion" or package_arch != "any":
+            fail(f"Unexpected Arch package metadata: {package_name} {package_version} {package_arch}")
+        assets.append(asset(package, "pacman-local", package_name, package_version, {
+            "os_id": "archarm", "os_version": "*", "arch": "aarch64", "device": "SM-X810",
         }))
 
     document = {

@@ -10,6 +10,7 @@ import os
 import stat
 from types import SimpleNamespace
 from unittest.mock import patch
+from tab_companion.platform_backend import backend_for_manager
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -22,23 +23,23 @@ class PackageMetadataTests(unittest.TestCase):
     def setUp(self):
         self.path = Path(tempfile.gettempdir()) / "test-package"
 
-    def _check(self, os_id, fmt, result, expected_version, arch):
-        with patch("tab_companion.package_installer._os_id", return_value=os_id), \
+    def _check(self, manager, fmt, result, expected_version, arch):
+        with patch("tab_companion.package_installer.detect_backend", return_value=backend_for_manager(manager)), \
              patch("tab_companion.package_installer.shutil.which", return_value="/usr/bin/tool"), \
              patch("tab_companion.package_installer.subprocess.check_output", return_value=result):
             _verify_package(self.path, fmt, "tab-companion", expected_version, arch)
 
     def test_rpm_metadata_matches(self):
-        self._check("fedora", "rpm", "tab-companion\n1.2.0-1.fc44\nnoarch", "1.2.0-1.fc44", "aarch64")
+        self._check("rpm", "rpm", "tab-companion\n1.2.0-1.fc44\nnoarch", "1.2.0-1.fc44", "aarch64")
 
     def test_deb_maps_aarch64_to_arm64(self):
-        self._check("ubuntu", "deb", "Package: tab-companion\nVersion: 1.2.0-1\nArchitecture: arm64", "1.2.0-1", "aarch64")
+        self._check("deb", "deb", "Package: tab-companion\nVersion: 1.2.0-1\nArchitecture: arm64", "1.2.0-1", "aarch64")
 
     def test_arch_local_package_metadata_matches(self):
-        self._check("arch", "pacman-local", "tab-companion\n1.2.0-1\naarch64", "1.2.0-1", "aarch64")
+        self._check("pacman", "pacman-local", "tab-companion\n1.2.0-1\nany", "1.2.0-1", "aarch64")
 
     def test_wrong_release_version_rejected(self):
-        with patch("tab_companion.package_installer._os_id", return_value="fedora"), \
+        with patch("tab_companion.package_installer.detect_backend", return_value=backend_for_manager("rpm")), \
              patch("tab_companion.package_installer.shutil.which", return_value="/usr/bin/rpm"), \
              patch("tab_companion.package_installer.subprocess.check_output", return_value="tab-companion\n1.0.0-1.fc44\naarch64"):
             with self.assertRaisesRegex(ValueError, "version"):
@@ -67,7 +68,9 @@ class RpmTransactionTests(unittest.TestCase):
             transaction = self._archive(root)
             destination = root / "out"
             destination.mkdir()
-            with patch("tab_companion.package_installer.subprocess.check_output",
+            with patch("tab_companion.package_installer.detect_backend", return_value=backend_for_manager("rpm")), \
+                 patch("tab_companion.package_installer.shutil.which", return_value="/usr/bin/rpm"), \
+                 patch("tab_companion.package_installer.subprocess.check_output",
                        return_value="mutter\n50.5-1000000.123.fc44\naarch64"):
                 files = _extract_rpm_transaction(transaction, destination, "aarch64")
             self.assertEqual([path.name for path in files], ["mutter.rpm"])
@@ -86,7 +89,9 @@ class RpmTransactionTests(unittest.TestCase):
             transaction = self._archive(root)
             destination = root / "out"
             destination.mkdir()
-            with patch("tab_companion.package_installer.subprocess.check_output",
+            with patch("tab_companion.package_installer.detect_backend", return_value=backend_for_manager("rpm")), \
+                 patch("tab_companion.package_installer.shutil.which", return_value="/usr/bin/rpm"), \
+                 patch("tab_companion.package_installer.subprocess.check_output",
                        return_value="mutter\n50.4-1.fc44\naarch64"):
                 with self.assertRaisesRegex(ValueError, "metadata"):
                     _extract_rpm_transaction(transaction, destination, "aarch64")
@@ -99,14 +104,15 @@ class RpmTransactionTests(unittest.TestCase):
             rpms = [root / "port.rpm", root / "mutter.rpm", root / "common.rpm"]
             with patch("tab_companion.package_installer._copy_verified", return_value=staged), \
                  patch("tab_companion.package_installer.STAGING", root), \
-                 patch("tab_companion.package_installer._os_id", return_value="fedora"), \
-                 patch("tab_companion.package_installer.shutil.which", return_value="/usr/bin/dnf5"), \
+                 patch("tab_companion.package_installer.detect_backend", return_value=backend_for_manager("rpm")), \
+                 patch("tab_companion.platform_backend.shutil.which",
+                       side_effect=lambda name: "/usr/bin/dnf" if name == "dnf" else None), \
                  patch("tab_companion.package_installer._extract_rpm_transaction", return_value=rpms), \
-                 patch("tab_companion.package_installer._run") as run:
+                 patch("tab_companion.platform_backend._run") as run:
                 install(root / "download.zip", "a" * 64, "rpm-transaction",
                         "x810-fedora-update", "0.1.0+123", "aarch64", os.getuid())
             run.assert_called_once_with([
-                "/usr/bin/dnf5", "install", "--assumeyes",
+                "/usr/bin/dnf", "install", "--assumeyes",
                 "--setopt=clean_requirements_on_remove=False",
                 *(str(path) for path in rpms),
             ])

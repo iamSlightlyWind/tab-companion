@@ -19,7 +19,7 @@ from pathlib import Path
 
 PROJECT = "tab-companion"
 MANIFEST = "tab-companion-update.json"
-FORMATS = {"ubuntu": "deb", "fedora": "rpm", "arch": "aur-source"}
+FORMATS = {"ubuntu": "deb", "fedora": "rpm", "arch": "pacman-local"}
 SAFE_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,180}$")
 SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,80}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")

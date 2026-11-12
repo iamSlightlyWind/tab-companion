@@ -7,5 +7,10 @@
   "device_id": "SM-X910",
   "os_id": "ubuntu",
   "os_version": "24.04",
-  "arch": "aarch64"
+  "arch": "aarch64",
+  "legacy_update": {
+    "backend": "deb",
+    "available": true,
+    "helper": "/usr/libexec/tab-companion-update"
+  }
 }

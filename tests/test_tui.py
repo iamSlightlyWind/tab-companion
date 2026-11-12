@@ -2,6 +2,7 @@
 import io
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tab_companion import tui
@@ -17,10 +18,19 @@ class CompanionTuiTests(unittest.TestCase):
         run_tui.assert_called_once_with([])
 
     def test_menu_is_limited_to_requested_update_actions_and_gates_x810(self):
-        actions = tui.menu_actions({"device": "SM-X810"}, "rpm")
+        capability = {
+            "port_update": {"backend": "rpm", "available": True},
+            "kernel_update": {"backend": "rpm", "available": True},
+        }
+        with patch.object(tui, "get_port_record", return_value=capability):
+            actions = tui.menu_actions({"device": "SM-X810"}, "rpm")
         self.assertEqual([name for name, _label in actions], ["app", "port", "kernel", "fallback", "quit"])
-        actions = tui.menu_actions({"device": "other"}, "rpm")
+        with patch.object(tui, "get_port_record", return_value=capability):
+            actions = tui.menu_actions({"device": "other"}, "rpm")
         self.assertEqual([name for name, _label in actions], ["app", "port", "quit"])
+        with patch.object(tui, "get_port_record", return_value={}):
+            actions = tui.menu_actions({"device": "SM-X810"}, "rpm")
+        self.assertEqual([name for name, _label in actions], ["app", "quit"])
 
     def test_transaction_confirmation_warns_that_mutter_candidate_is_experimental(self):
         warning = tui._package_confirmation(type("Asset", (), {"format": "rpm-transaction"})())
@@ -32,7 +42,11 @@ class CompanionTuiTests(unittest.TestCase):
         answers = iter(("bad", "99", "5"))
         output = io.StringIO()
         with patch.object(tui, "host_target", return_value={"device": "SM-X810"}), \
-             patch.object(tui, "package_manager", return_value="rpm"), \
+             patch.object(tui, "detect_backend", return_value=SimpleNamespace(package_manager="rpm")), \
+             patch.object(tui, "get_port_record", return_value={
+                 "port_update": {"backend": "rpm", "available": True},
+                 "kernel_update": {"backend": "rpm", "available": True},
+             }), \
              patch.object(tui, "admin_available", return_value=False), \
              patch.object(tui, "_run_kernel_update") as kernel:
             self.assertEqual(tui.main(input_fn=lambda _prompt: next(answers),

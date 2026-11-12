@@ -14,8 +14,8 @@ from .admin_auth import (
     authorize_at_startup,
     command as admin_command,
 )
+from .platform_backend import backend_for_manager, detect_backend
 from .updates import (
-    APP_BUILD_ARTIFACTS,
     APP_PROJECT,
     APP_REPO,
     UpdateConfig,
@@ -26,7 +26,6 @@ from .updates import (
     get_port_record,
     host_target,
     installed_build_info,
-    package_manager,
 )
 from .x810_fallbacks import list_snapshots
 from .x810_kernel_update import (
@@ -45,8 +44,11 @@ KERNEL_HELPER = "/usr/local/libexec/tab-companion-kernel-update"
 def menu_actions(target: dict, manager: str | None) -> tuple[tuple[str, str], ...]:
     """The TUI deliberately exposes only package/app/kernel update actions."""
     actions = [("app", "Check/install Tab Companion update")]
-    actions.append(("port", "Check/install Fedora port update"))
-    if target.get("device") == "SM-X810" and manager == "rpm":
+    backend = backend_for_manager(manager)
+    record = get_port_record()
+    if backend and backend.has_port_update(record):
+        actions.append(("port", "Check/install Linux port update"))
+    if backend and backend.has_kernel_update(target, record):
         actions.append(("kernel", "Check/install X810 kernel + boot update"))
         actions.append(("fallback", "List/restore cached X810 boot fallback"))
     actions.append(("quit", "Quit"))
@@ -63,11 +65,15 @@ def _package_confirmation(asset) -> str:
     if asset.format == "rpm-transaction":
         message += (" WARNING: this is an experimental Mutter compositor update for HDR testing; "
                     "it may affect the GNOME session and does not yet establish working HDR.")
+    backend = detect_backend()
+    if backend.install_notice():
+        message += " " + backend.install_notice()
     return message
 
 
 def _run_package_channel(key: str, *, input_fn=input, output_fn=print):
-    manager = package_manager()
+    backend = detect_backend()
+    manager = backend.package_manager
     if manager not in ("deb", "rpm", "pacman"):
         raise UpdateError("This system has no supported native package manager")
     target = host_target()
@@ -75,7 +81,7 @@ def _run_package_channel(key: str, *, input_fn=input, output_fn=print):
     if key == "app":
         project, repo = APP_PROJECT, config.get("app_repo", APP_REPO)
         workflow, branch = "build-updates.yml", "main"
-        artifact = APP_BUILD_ARTIFACTS.get(manager, "")
+        artifact = backend.app_artifact or ""
         public, tag_prefix = True, "tab-companion-build"
         info_path = "/usr/share/tab-companion/app-build.json"
     else:
@@ -114,8 +120,6 @@ def _run_package_channel(key: str, *, input_fn=input, output_fn=print):
         output_fn("Cancelled; no package was installed.")
         return
     package = extract_verified_asset(build)
-    if asset.format == "aur-source":
-        raise UpdateError("TUI does not build or install AUR source packages; use the GUI updater instead")
     digest = hashlib.sha256()
     with package.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -214,7 +218,7 @@ def main(argv=None, *, input_fn=input, output_fn=print):
         output_fn("Requesting administrator authorization for this Tab Companion session…")
         if not authorize_at_startup():
             output_fn("Authorization cancelled; privileged actions will request it if needed.")
-    target, manager = host_target(), package_manager()
+    target, manager = host_target(), detect_backend().package_manager
     handlers = {
         "app": lambda: _run_package_channel("app", input_fn=input_fn, output_fn=output_fn),
         "port": lambda: _run_package_channel("port", input_fn=input_fn, output_fn=output_fn),

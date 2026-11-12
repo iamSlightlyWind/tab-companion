@@ -12,7 +12,7 @@ from .i18n import _, N_
 from .key_selector import KeyChooser, chord_label
 from .charging_page import ChargingPage, available as charging_available
 from .power_profiles_page import PowerProfilesPage, available as power_profiles_available
-from .updates_page import UpdatesPage, legacy_ubuntu_update_available
+from .updates_page import UpdatesPage, legacy_update_available
 
 
 GESTURES = (
@@ -211,10 +211,8 @@ class CompanionWindow(Adw.ApplicationWindow):
         self.view_stack.add_titled_with_icon(
             UpdatesPage(self), "updates", _("Updates"), "software-update-available-symbolic"
         )
-        if legacy_ubuntu_update_available():
-            # The preserved upstream APT/dpkg port updater includes the X910
-            # offline update path. Do not replace it with the generic Fedora/
-            # Arch package updater or expose it on other devices.
+        if legacy_update_available():
+            # Ports with a compatible legacy UI advertise it in port metadata.
             from .backends.ubuntu_legacy.update_page import UpdatePage as UbuntuUpdatePage
             self.view_stack.add_titled_with_icon(
                 UbuntuUpdatePage(self), "ubuntu-system-updates", _("Ubuntu system"),

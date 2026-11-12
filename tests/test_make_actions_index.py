@@ -76,9 +76,8 @@ class BuildIndexSelectionTests(unittest.TestCase):
                             }):
                         INDEX.main()
                 else:
-                    with patch.object(INDEX, "aur_metadata", return_value={
-                        "pkgname": "tab-companion", "pkgver": "1.4.2", "pkgrel": "1000007",
-                    }):
+                    with patch.object(INDEX, "pacman_package_fields",
+                                      return_value=("tab-companion", "1.4.2-1000007", "any")):
                         INDEX.main()
             return json.loads((root / "tab-companion-update.json").read_text())
 
@@ -92,10 +91,10 @@ class BuildIndexSelectionTests(unittest.TestCase):
         self.assertEqual([asset["format"] for asset in manifest["assets"]], ["rpm"])
         self.assertEqual(manifest["assets"][0]["target"]["os_id"], "fedora")
 
-    def test_arch_index_contains_only_aur_source(self):
-        manifest = self.make_index("arch", ["tab-companion-arch-source.tar.gz"])
-        self.assertEqual([asset["format"] for asset in manifest["assets"]], ["aur-source"])
-        self.assertEqual(manifest["assets"][0]["target"]["os_id"], "arch")
+    def test_arch_index_contains_only_native_pacman_package(self):
+        manifest = self.make_index("arch", ["tab-companion-1.4.2-1000007-any.pkg.tar.zst"])
+        self.assertEqual([asset["format"] for asset in manifest["assets"]], ["pacman-local"])
+        self.assertEqual(manifest["assets"][0]["target"]["os_id"], "archarm")
 
 
 if __name__ == "__main__":

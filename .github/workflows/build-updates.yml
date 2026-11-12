@@ -159,7 +159,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build self-contained Arch update source
+      - name: Install Arch package index dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zstd
+
+      - name: Build a self-contained Arch package source
         run: |
           set -euo pipefail
           base_version=$(sed -n 's/^Version: //p' ports/ubuntu-x910/DEBIAN/control | head -n1)
@@ -170,9 +175,10 @@ jobs:
           mkdir -p build/tab-companion-arch
           cp "${sources[0]}" build/tab-companion-arch/tab-companion-arch-source.tar.gz
 
-      - name: Validate source using Arch makepkg
+      - name: Build the Arch package in makepkg
         run: |
           set -euo pipefail
+          mkdir -p build/tab-companion-arch/output
           docker run --rm \
             -v "$GITHUB_WORKSPACE/build/tab-companion-arch:/artifact" \
             archlinux:base-devel bash -euc '
@@ -180,8 +186,14 @@ jobs:
               mkdir -p /home/builder/build
               tar -xzf /artifact/tab-companion-arch-source.tar.gz -C /home/builder/build
               chown -R builder:builder /home/builder/build
-              su builder -s /bin/bash -c "cd /home/builder/build && makepkg --nodeps --noconfirm --cleanbuild"
+              chmod 0777 /artifact/output
+              su builder -s /bin/bash -c "cd /home/builder/build && makepkg --nodeps --noconfirm --cleanbuild --outdir /artifact/output"
             '
+          mapfile -t packages < <(find build/tab-companion-arch/output -maxdepth 1 -type f -name '*.pkg.tar.zst' -print)
+          [[ ${#packages[@]} -eq 1 ]]
+          mv "${packages[0]}" build/tab-companion-arch/
+          rmdir build/tab-companion-arch/output
+          rm -f build/tab-companion-arch/tab-companion-arch-source.tar.gz
 
       - name: Generate Arch update index
         run: python3 tools/make-actions-index.py build/tab-companion-arch arch

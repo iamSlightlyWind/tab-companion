@@ -7,11 +7,11 @@ the Linux publish job removes superseded build releases and its temporary
 Ubuntu/Fedora/Arch Actions package artifacts after publication. No login is
 needed to download release assets. The app channel defaults to
 `build-updates.yml` and `tab-companion-ubuntu` on Ubuntu,
-`tab-companion-fedora` on Fedora, or `tab-companion-arch` on Arch. Port packages
-can provide their own workflow, branch, release asset name, build-info path,
-release-tag prefix, and `public_release: true` setting in
-`/usr/share/tab-companion/port.json`; this lets a port use the same public
-run-keyed release path instead of the unauthenticated Actions-artifact API.
+`tab-companion-fedora` on Fedora, or `tab-companion-arch` on Arch. Port
+metadata can advertise backend-scoped `port_update` and `kernel_update`
+capabilities; only features matching the detected package backend are shown.
+Port feeds can also provide their own workflow, branch, release asset name,
+build-info path, release-tag prefix, and `public_release: true` setting.
 For example, a port's updater routing fields can be:
 
 ```json
@@ -57,8 +57,9 @@ asset from the downloaded ZIP, verifies its declared size and SHA-256, then
 asks the platform package manager to install it. `app-build.json` records the
 installed build's run ID and commit so repeated checks do not offer the same
 build again. Port packages should include a corresponding port build-info
-file. `aur-source` assets are built with `makepkg` as the logged-in user, not
-as root; pacman installs the resulting package.
+file. Arch releases carry a built `.pkg.tar.zst` package; the privileged helper
+validates it, performs a full `pacman -Syu`, then installs the local package
+with `pacman -U`. The updater does not build or install AUR source as root.
 
 The Linux updater workflow (`build-updates.yml`) runs only for changes that are
 not Android-only, documentation-only, or README-only. It builds the Ubuntu,
@@ -109,8 +110,8 @@ artifact; an Android-only run in that feed would break existing clients.
   legacy path; it is not the feed used for Tab Companion self-updates.
 - **Fedora:** the app validates RPM metadata and uses DNF/DNF5 through the
   fixed polkit installer helper.
-- **Arch:** local pacman packages use the system package manager; AUR source
-  assets are safely extracted and built as the logged-in user.
+- **Arch:** native `.pkg.tar.zst` packages are installed through pacman after
+  a full system upgrade; the updater accepts no AUR source archive.
 
 The user confirms installation. No updater writes boot partitions. Kernel and
 boot images remain manual TWRP packages. Detached signatures are not part of

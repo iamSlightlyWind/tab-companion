@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .platform_backend import backend_for_manager, detect_backend
+
 
 APP_REPO = "https://github.com/iamSlightlyWind/tab-companion"
 APP_PROJECT = "tab-companion"
@@ -37,7 +39,7 @@ HEX_COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,180}$")
 SAFE_PACKAGE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:.+_~-]{0,127}$")
 SAFE_PACKAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_@-]{0,127}$")
-FORMATS = {"rpm", "rpm-transaction", "deb", "pacman-local", "aur-source"}
+FORMATS = {"rpm", "rpm-transaction", "deb", "pacman-local"}
 _USER_AGENT = "Tab-Companion-Updater/1"
 _API_BASE = "https://api.github.com"
 _X810_PORT_REPO = ("iamslightlywind", "x810-fedroid")
@@ -754,20 +756,10 @@ def installed_port_version(record=None):
 
 
 def package_manager():
-    os_id = parse_os_release().get("ID", "").lower()
-    if os_id in ("ubuntu", "debian") and shutil.which("apt-get") and shutil.which("dpkg"):
-        return "deb"
-    if os_id in ("fedora", "rhel", "centos") and (shutil.which("dnf5") or shutil.which("dnf")) and shutil.which("rpm"):
-        return "rpm"
-    if os_id == "arch" and shutil.which("pacman"):
-        return "pacman"
-    return None
+    """Return the selected native package backend for compatibility callers."""
+    return detect_backend().package_manager
 
 
 def asset_supported_by_manager(asset, manager):
-    supported = {
-        "deb": {"deb"},
-        "rpm": {"rpm", "rpm-transaction"},
-        "pacman": {"pacman-local", "aur-source"},
-    }.get(manager, set())
-    return asset.format in supported
+    backend = backend_for_manager(manager)
+    return bool(backend and backend.supports_format(asset.format))

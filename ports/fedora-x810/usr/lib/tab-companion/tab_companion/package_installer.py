@@ -14,6 +14,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from .platform_backend import detect_backend
+
 MAX_PACKAGE_SIZE = 4 * 1024**3
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_@-]{0,127}$")
@@ -77,46 +79,21 @@ def _copy_verified(source, expected, uid, fmt):
         os.close(fd)
 
 
-def _os_id():
-    try:
-        for line in Path("/etc/os-release").read_text().splitlines():
-            if line.startswith("ID="):
-                return line[3:].strip().strip("\"'").lower()
-    except OSError:
-        pass
-    return ""
-
-
 def _verify_package(path, fmt, package_name, package_version, expected_arch):
     if not PACKAGE.fullmatch(package_name):
         raise ValueError("Invalid package name")
-    if fmt == "deb":
-        if _os_id() not in ("ubuntu", "debian") or not shutil.which("dpkg-deb"):
-            raise ValueError("DEB packages can only be installed on Debian/Ubuntu")
-        raw = subprocess.check_output(["dpkg-deb", "-f", str(path), "Package", "Version", "Architecture"], text=True)
-        fields = dict(line.split(": ", 1) for line in raw.splitlines() if ": " in line)
-        found, found_version, found_arch = (fields[key] for key in ("Package", "Version", "Architecture"))
-        expected_arch = {"aarch64": "arm64"}.get(expected_arch, expected_arch)
-    elif fmt == "rpm":
-        if _os_id() not in ("fedora", "rhel", "centos") or not shutil.which("rpm"):
-            raise ValueError("RPM packages can only be installed on Fedora/RHEL")
-        fields = subprocess.check_output(["rpm", "-qp", "--queryformat", "%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}", str(path)], text=True).splitlines()
-        found, found_version, found_arch = fields
-    elif fmt == "rpm-transaction":
+    backend = detect_backend()
+    if not backend.supports_format(fmt):
+        raise ValueError(f"{fmt} packages are not supported by the detected {backend.name} backend")
+    if fmt == "rpm-transaction":
         # A transaction archive is verified and expanded as a set immediately
         # before DNF installs it; it is not itself an RPM package.
-        if _os_id() not in ("fedora", "rhel", "centos") or not shutil.which("rpm"):
-            raise ValueError("RPM transactions can only be installed on Fedora/RHEL")
         if package_name != "x810-fedora-update" or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_~-]{0,127}", package_version):
             raise ValueError("Invalid X810 Fedora transaction identity")
         return
-    elif fmt == "pacman-local":
-        if _os_id() != "arch" or not shutil.which("pacman"):
-            raise ValueError("Arch packages can only be installed on Arch Linux")
-        fields = subprocess.check_output(["pacman", "-Qp", "--print-format", "%n\\n%v\\n%a", str(path)], text=True).splitlines()
-        found, found_version, found_arch = fields
-    else:
-        raise ValueError("Unsupported native package format")
+    found, found_version, found_arch = backend.inspect_package(fmt, path)
+    if fmt == "deb":
+        expected_arch = {"aarch64": "arm64"}.get(expected_arch, expected_arch)
     if found != package_name:
         raise ValueError("Package name does not match the build manifest")
     if found_version != package_version:
@@ -202,11 +179,8 @@ def _extract_rpm_transaction(path, destination, expected_arch):
                 if written != size or hasher.hexdigest() != digest:
                     target.unlink(missing_ok=True)
                     raise ValueError("RPM package checksum or size mismatch")
-                fields = subprocess.check_output(
-                    ["rpm", "-qp", "--queryformat", "%{NAME}\\n%{VERSION}-%{RELEASE}\\n%{ARCH}", str(target)],
-                    text=True,
-                ).splitlines()
-                if len(fields) != 3 or fields[0] != package_name or fields[1] != package_version:
+                fields = detect_backend().inspect_package("rpm", target)
+                if fields[0] != package_name or fields[1] != package_version:
                     raise ValueError("RPM metadata does not match transaction manifest")
                 if fields[2] not in (expected_arch, "noarch"):
                     raise ValueError("RPM architecture does not match this tablet")
@@ -221,29 +195,18 @@ def _extract_rpm_transaction(path, destination, expected_arch):
 def install(source, expected_hash, fmt, package_name, package_version, expected_arch, requesting_uid):
     if not DIGEST.fullmatch(expected_hash):
         raise ValueError("Invalid SHA-256 value")
+    backend = detect_backend()
+    if not backend.supports_format(fmt):
+        raise ValueError(f"{fmt} updates are not supported by the detected {backend.name} backend")
     path = _copy_verified(source, expected_hash, requesting_uid, fmt)
     try:
         _verify_package(path, fmt, package_name, package_version, expected_arch)
-        if fmt == "deb":
-            _run(["apt-get", "install", "--yes", "--no-remove", str(path)])
-        elif fmt == "rpm":
-            manager = shutil.which("dnf5") or shutil.which("dnf")
-            if not manager:
-                raise ValueError("DNF is not installed")
-            _run([manager, "install", "--assumeyes", "--setopt=clean_requirements_on_remove=False", str(path)])
-        elif fmt == "rpm-transaction":
-            manager = shutil.which("dnf5") or shutil.which("dnf")
-            if not manager:
-                raise ValueError("DNF is not installed")
+        if fmt == "rpm-transaction":
             with tempfile.TemporaryDirectory(prefix="rpm-transaction-", dir=STAGING) as temporary:
                 rpms = _extract_rpm_transaction(path, Path(temporary), expected_arch)
-                _run([manager, "install", "--assumeyes", "--setopt=clean_requirements_on_remove=False",
-                      *map(str, rpms)])
+                backend.install_rpm_transaction(rpms)
         else:
-            # Arch does not support partial upgrades. Bring the installed system
-            # fully in sync before installing this verified local package.
-            _run(["pacman", "-Syu", "--noconfirm"])
-            _run(["pacman", "-U", "--noconfirm", str(path)])
+            backend.install_package(fmt, path)
     finally:
         try:
             path.unlink()

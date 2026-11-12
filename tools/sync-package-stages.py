@@ -35,10 +35,13 @@ def replace_tree(source: Path, target: Path):
 
 def sync_ubuntu():
     for name in (
-        "__init__.py", "admin_auth.py", "aur.py", "updates.py", "updates_page.py", "package_installer.py",
+        "__init__.py", "admin_auth.py", "platform_backend.py", "updates.py", "updates_page.py", "package_installer.py",
         "update_languages.py", "update_translations.py",
     ):
         shutil.copy2(SOURCE / name, UBUNTU_PACKAGE / name)
+    # The updater no longer accepts source archives for privileged Arch
+    # installation; do not leave the removed extractor in the DEB stage.
+    (UBUNTU_PACKAGE / "aur.py").unlink(missing_ok=True)
     window = UBUNTU_PACKAGE / "window.py"
     text = window.read_text(encoding="utf-8")
     import_line = "from .update_page import UpdatePage\n"
