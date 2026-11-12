@@ -96,6 +96,14 @@ class BuildIndexSelectionTests(unittest.TestCase):
         self.assertEqual([asset["format"] for asset in manifest["assets"]], ["pacman-local"])
         self.assertEqual(manifest["assets"][0]["target"]["os_id"], "archarm")
 
+    def test_arch_workflow_builds_and_publishes_native_package(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/build-updates.yml").read_text()
+        arch_job = workflow.split("\n  arch:\n", 1)[1].split("\n  publish:\n", 1)[0]
+        self.assertIn("makepkg --nodeps --noconfirm --cleanbuild", arch_job)
+        self.assertIn('find /home/builder/build -maxdepth 1 -type f -name "*.pkg.tar.zst"', arch_job)
+        self.assertIn('one(root, "*.pkg.tar.zst")', (SCRIPT.read_text()))
+        self.assertNotIn("--outdir", arch_job)
+
 
 if __name__ == "__main__":
     unittest.main()

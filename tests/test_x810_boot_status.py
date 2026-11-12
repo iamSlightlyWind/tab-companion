@@ -78,6 +78,7 @@ class BootStatusTests(unittest.TestCase):
             dest.write_bytes(b"----")
         with patch.object(core, "BASE", self.base), patch.object(core, "PARTS", self.parts), \
                 patch.object(core, "validate_device"), \
+                patch.object(core, "current_system", return_value="fedora"), \
                 patch.object(core, "snapshot_current_linux") as snapshot, \
                 patch.object(core, "device_path", side_effect=lambda part: destinations[part]), \
                 patch.object(core.os, "sync"):

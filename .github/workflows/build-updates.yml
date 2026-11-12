@@ -187,7 +187,10 @@ jobs:
               tar -xzf /artifact/tab-companion-arch-source.tar.gz -C /home/builder/build
               chown -R builder:builder /home/builder/build
               chmod 0777 /artifact/output
-              su builder -s /bin/bash -c "cd /home/builder/build && makepkg --nodeps --noconfirm --cleanbuild --outdir /artifact/output"
+              su builder -s /bin/bash -c "cd /home/builder/build && makepkg --nodeps --noconfirm --cleanbuild"
+              mapfile -t packages < <(find /home/builder/build -maxdepth 1 -type f -name "*.pkg.tar.zst" -print)
+              [[ ${#packages[@]} -eq 1 ]]
+              mv "${packages[0]}" /artifact/output/
             '
           mapfile -t packages < <(find build/tab-companion-arch/output -maxdepth 1 -type f -name '*.pkg.tar.zst' -print)
           [[ ${#packages[@]} -eq 1 ]]
