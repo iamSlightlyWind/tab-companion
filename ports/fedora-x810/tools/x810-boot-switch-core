@@ -84,22 +84,33 @@ def read_os_release_id():
         pass
     return ''
 
+def read_os_release_pretty_name():
+    try:
+        for line in pathlib.Path('/etc/os-release').read_text(encoding='utf-8').splitlines():
+            if line.startswith('PRETTY_NAME='):
+                return line.partition('=')[2].strip().strip('"')[:120]
+    except OSError:
+        pass
+    return ''
+
 def current_system():
-    """Identify the running OS without hashing boot partitions.
+    """Return the stable Linux-set ID used by both Linux and Android clients.
 
-    This backend is for the Fedora X810 port. validate_device() independently
-    requires its dedicated linuxroot partition, so a recognized Fedora ID is
-    sufficient and does not depend on saved images or a manifest.
+    ``fedora`` is the legacy on-disk set ID seeded by the Android-side port.
+    Keep it as the interop ID while the displayed label identifies the actual
+    Linux distro.  The exact X810 board and linuxroot checks still gate access.
     """
-    return 'fedora' if read_os_release_id() == 'fedora' else 'mixed/unknown'
+    return 'fedora' if read_os_release_id() in ('fedora', 'archarm') else 'mixed/unknown'
 
-def snapshot_current_fedora():
-    """Copy the live Fedora boot set into Linuxroot before switching away.
+def snapshot_current_linux():
+    """Copy the live Linux boot set into linuxroot before switching away.
 
     This deliberately does not inspect image signatures or compare hashes:
     it preserves the exact four bytesets currently running, including local
-    kernel/boot customizations. Device identity and partition geometry remain
-    checked by validate_device() before this function is called.
+    kernel/boot customizations. The `fedora` directory name is retained for
+    compatibility with the Android-side selector; name.txt records the real
+    running distro. Device identity and partition geometry remain checked by
+    validate_device() before this function is called.
     """
     BASE.mkdir(parents=True, exist_ok=True)
     stage = BASE / '.fedora-snapshot-pending'
@@ -122,7 +133,8 @@ def snapshot_current_fedora():
                 dst.flush()
                 os.fsync(dst.fileno())
             emit(f'Saved current {part} to shared Linuxroot storage')
-        (stage / 'name.txt').write_text('Fedora\n', encoding='utf-8')
+        label = read_os_release_pretty_name() or 'Linux'
+        (stage / 'name.txt').write_text(label + '\n', encoding='utf-8')
         dir_fd = os.open(stage, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
         try:
             os.fsync(dir_fd)
@@ -170,8 +182,13 @@ def status():
         except Exception as error:
             ready[name] = False
             errors[name] = str(error)
-    print(json.dumps({'current': current_system(), 'ready': ready,
-                      'errors': errors}, sort_keys=True))
+    current = current_system()
+    result = {'current': current, 'ready': ready, 'errors': errors}
+    if current == 'fedora':
+        label = read_os_release_pretty_name()
+        if label:
+            result['current_label'] = label
+    print(json.dumps(result, sort_keys=True))
 
 def stage(name):
     if name not in ('fedora', 'android'):
@@ -179,9 +196,11 @@ def stage(name):
     validate_device()
     validate_images(name)
     if name == 'android':
-        # Both Android and Fedora boot-switch apps use the same ext4 store on
-        # the linuxroot partition; no SD card or /sdcard access is required.
-        snapshot_current_fedora()
+        if current_system() != 'fedora':
+            raise RuntimeError('Cannot save the active Linux boot set: expected Fedora or Arch Linux ARM on linuxroot')
+        # Android still expects the original `fedora` set ID; the name file
+        # records the actual Linux distro. Both clients use linuxroot storage.
+        snapshot_current_linux()
     for part, size in PARTS.items():
         image = BASE / name / f'{part}.img'
         dest = device_path(part)
@@ -196,7 +215,7 @@ def stage(name):
             os.fsync(out.fileno())
         os.sync()
         if not same_bytes(image, dest, size):
-            raise RuntimeError(f'{part}: read-back differs from the selected image. Do NOT reboot; stage Fedora again.')
+            raise RuntimeError(f'{part}: read-back differs from the selected image. Do NOT reboot; restage the Linux boot set.')
         emit(f'{part}: verified')
     emit(f'Complete: {name} boot set staged. Tablet was NOT rebooted.')
 

@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: MIT
-"""Apply a per-user RAM ceiling to every active and future native Firefox app scope."""
+"""Apply a per-user RAM ceiling to active and future native Firefox/Brave scopes."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import time
 sys.path.insert(0, "/usr/lib/tab-companion")
 from tab_companion.browser_memory import (  # noqa: E402
     DEFAULT_SETTINGS,
-    firefox_scope_names,
+    browser_scope_names,
     read_settings,
     status_path,
     valid_settings,
@@ -46,7 +46,7 @@ def atomic_json(path: Path, value: object, mode: int = 0o600) -> None:
             os.unlink(temporary)
 
 
-class FirefoxMemoryAgent:
+class BrowserMemoryAgent:
     def __init__(self, run=subprocess.run, config_reader=read_settings,
                  state_path: Path | None = None, report_path: Path | None = None):
         self.run = run
@@ -101,41 +101,45 @@ class FirefoxMemoryAgent:
             "list-units", "--type=scope", "--state=running", "--no-legend",
             "--plain", "--no-pager",
         )
-        scopes = firefox_scope_names(output)
+        all_scopes = browser_scope_names(output)
+        scopes = browser_scope_names(output, settings["browser"])
         applied = 0
         errors = []
+        pending = {}
 
         if settings["enabled"]:
             limit_bytes = settings["limit_deci_gb"] * 100_000_000
-            current_managed = {}
             for unit in scopes:
                 try:
                     wanted = (str(limit_bytes), str(limit_bytes))
                     if self._properties(unit) != wanted:
                         self._set_limit(unit, limit_bytes)
-                    current_managed[unit] = limit_bytes
+                    pending[unit] = limit_bytes
                     applied += 1
                 except (OSError, subprocess.SubprocessError) as error:
                     errors.append(f"{unit}: {error}")
-            self.managed = current_managed
-        else:
-            active = set(scopes)
-            for unit, previous_limit in self.managed.items():
-                if unit not in active:
-                    continue
-                try:
-                    expected = (str(previous_limit), str(previous_limit))
-                    if self._properties(unit) == expected:
-                        self._set_limit(unit, None)
-                except (OSError, subprocess.SubprocessError) as error:
-                    errors.append(f"{unit}: {error}")
-            self.managed = {}
+        # Clear only cgroup properties previously set by this agent. This also
+        # handles switching the dropdown from Firefox to Brave and disabling it.
+        active = set(all_scopes)
+        selected = set(scopes) if settings["enabled"] else set()
+        for unit, previous_limit in self.managed.items():
+            if unit not in active or unit in selected:
+                continue
+            try:
+                expected = (str(previous_limit), str(previous_limit))
+                if self._properties(unit) == expected:
+                    self._set_limit(unit, None)
+            except (OSError, subprocess.SubprocessError) as error:
+                errors.append(f"{unit}: {error}")
+                pending[unit] = previous_limit
+        self.managed = pending
 
         self._save_state()
         status = {
             "enabled": settings["enabled"],
+            "browser": settings["browser"],
             "limit_deci_gb": settings["limit_deci_gb"],
-            "firefox_sessions": len(scopes),
+            "browser_sessions": len(scopes),
             "applied_sessions": applied,
             "error": "; ".join(errors) if errors else None,
         }
@@ -145,7 +149,7 @@ class FirefoxMemoryAgent:
     def restore(self) -> None:
         """Remove only limits this agent applied, when they still match."""
         try:
-            scopes = set(firefox_scope_names(self._call(
+            scopes = set(browser_scope_names(self._call(
                 "list-units", "--type=scope", "--state=running", "--no-legend",
                 "--plain", "--no-pager",
             )))
@@ -165,7 +169,7 @@ class FirefoxMemoryAgent:
 
 
 def main() -> int:
-    agent = FirefoxMemoryAgent()
+    agent = BrowserMemoryAgent()
     stopping = False
 
     def stop(_signum, _frame):
@@ -181,8 +185,9 @@ def main() -> int:
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 atomic_json(agent.report_path, {
                     "enabled": agent.config_reader().get("enabled", False),
+                    "browser": agent.config_reader().get("browser", "firefox"),
                     "limit_deci_gb": agent.config_reader().get("limit_deci_gb", 20),
-                    "firefox_sessions": 0,
+                    "browser_sessions": 0,
                     "applied_sessions": 0,
                     "error": str(error),
                 }, 0o600)

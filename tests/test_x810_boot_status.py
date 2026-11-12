@@ -44,6 +44,21 @@ class BootStatusTests(unittest.TestCase):
         self.assertTrue(status["ready"]["android"])
         self.assertNotIn("sets", status)
 
+    def test_arch_linux_arm_uses_the_shared_linux_boot_set_id(self):
+        with patch.object(core, "read_os_release_id", return_value="archarm"):
+            self.assertEqual(core.current_system(), "fedora")
+
+    def test_status_reports_actual_arch_label_for_shared_linux_slot(self):
+        with patch.object(core, "BASE", self.base), patch.object(core, "PARTS", self.parts), \
+                patch.object(core, "current_system", return_value="fedora"), \
+                patch.object(core, "read_os_release_pretty_name", return_value="Arch Linux ARM"):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                core.status()
+            status = json.loads(output.getvalue())
+        self.assertEqual(status["current"], "fedora")
+        self.assertEqual(status["current_label"], "Arch Linux ARM")
+
     def test_status_still_rejects_missing_or_wrong_size_images(self):
         (self.base / "android" / "dtbo.img").write_bytes(b"short")
         with patch.object(core, "BASE", self.base), patch.object(core, "PARTS", self.parts), \
@@ -63,7 +78,7 @@ class BootStatusTests(unittest.TestCase):
             dest.write_bytes(b"----")
         with patch.object(core, "BASE", self.base), patch.object(core, "PARTS", self.parts), \
                 patch.object(core, "validate_device"), \
-                patch.object(core, "snapshot_current_fedora") as snapshot, \
+                patch.object(core, "snapshot_current_linux") as snapshot, \
                 patch.object(core, "device_path", side_effect=lambda part: destinations[part]), \
                 patch.object(core.os, "sync"):
             core.stage("android")
@@ -91,13 +106,43 @@ class BootStatusTests(unittest.TestCase):
 
         with patch.object(core, "BASE", destination), patch.object(core, "PARTS", test_parts), \
                 patch.object(core, "device_path", side_effect=lambda part: devices[part]), \
+                patch.object(core, "read_os_release_pretty_name", return_value="Fedora Linux 44"), \
                 patch.object(core, "emit"):
-            core.snapshot_current_fedora()
+            core.snapshot_current_linux()
 
         for part, data in live.items():
             self.assertEqual((destination / "fedora" / f"{part}.img").read_bytes(), data)
-        self.assertEqual((destination / "fedora" / "name.txt").read_text(), "Fedora\n")
+        self.assertEqual((destination / "fedora" / "name.txt").read_text(), "Fedora Linux 44\n")
         self.assertFalse((destination / "fedora" / "manifest.json").exists())
+
+    def test_snapshot_records_arch_label_in_android_compatible_linux_slot(self):
+        test_parts = {part: 32 for part in self.parts}
+        live = {part: (b"arch-" + part.encode()).ljust(size, b"!")
+                for part, size in test_parts.items()}
+        devices = {}
+        for part, data in live.items():
+            device = self.base / f"arch-{part}"
+            device.write_bytes(data)
+            devices[part] = device
+        destination = self.base / "sets"
+        with patch.object(core, "BASE", destination), patch.object(core, "PARTS", test_parts), \
+                patch.object(core, "device_path", side_effect=lambda part: devices[part]), \
+                patch.object(core, "read_os_release_pretty_name", return_value="Arch Linux ARM"), \
+                patch.object(core, "emit"):
+            core.snapshot_current_linux()
+        self.assertEqual((destination / "fedora" / "name.txt").read_text(), "Arch Linux ARM\n")
+        self.assertTrue(all((destination / "fedora" / f"{part}.img").read_bytes() == data
+                            for part, data in live.items()))
+
+    def test_arch_only_snapshots_before_switching_to_android(self):
+        with patch.object(core, "validate_device"), patch.object(core, "validate_images"), \
+                patch.object(core, "current_system", return_value="mixed/unknown"), \
+                patch.object(core, "snapshot_current_linux") as snapshot, \
+                patch.object(core, "device_path") as device_path:
+            with self.assertRaisesRegex(RuntimeError, "expected Fedora or Arch Linux ARM"):
+                core.stage("android")
+        snapshot.assert_not_called()
+        device_path.assert_not_called()
 
 
 if __name__ == "__main__":

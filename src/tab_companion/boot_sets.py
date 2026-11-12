@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 """UI-side client for the boot switch, kept off the main thread.
 
-Fedora uses the shared allowlisted Tab Companion admin helper, authenticated
-once at app start through Polkit. Other package stages retain their original
-fixed-helper pkexec flow. No boot block access happens in the UI process.
+The Fedora and Arch X810 packages use the shared allowlisted Tab Companion
+admin helper, authenticated once at app start through Polkit. Other package
+stages retain their original fixed-helper pkexec flow. No boot block access
+happens in the UI process.
 """
 
 import json

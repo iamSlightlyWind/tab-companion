@@ -267,8 +267,8 @@ class CompanionWindow(Adw.ApplicationWindow):
             icon_name="drive-multidisk-symbolic",
             title=_("Dual boot is not set up"),
             description=_(
-                "This tablet only has Linux installed. When Android shares the "
-                "storage with it, this page lets you restart into either system."
+                "No complete Linux and Android boot sets are staged yet. "
+                "When both are available, this page lets you restart into either system."
             ),
         )
         self.boot_stack.add_named(self.boot_empty, "empty")
@@ -280,9 +280,10 @@ class CompanionWindow(Adw.ApplicationWindow):
         self.boot_systems = Adw.PreferencesGroup(
             title=_("Systems"),
             description=_(
-                "Fedora and Android take turns on the four boot partitions. "
-                "The tablet restarts into the one you choose; your files stay "
-                "where they are. Android may restore Samsung recovery on its "
+                "Linux and Android take turns on the four boot partitions. "
+                "The Linux set can be Fedora or Arch Linux ARM. The tablet "
+                "restarts into the one you choose; your files stay where they are. "
+                "Android may restore Samsung recovery on its "
                 "first boot; see the TWRP note before switching."
             ),
         )

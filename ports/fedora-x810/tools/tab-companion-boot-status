@@ -76,6 +76,13 @@ def build_status(backend=BACKEND, base=BASE, runner=None, statvfs=None,
             "complete": bool(raw["ready"].get(set_id)),
             "detail": raw.get("errors", {}).get(set_id),
         })
+    current_label = raw.get("current_label")
+    if (raw.get("current") == "fedora" and isinstance(current_label, str)
+            and current_label.strip() and len(current_label.strip()) <= 120):
+        for entry in sets:
+            if entry["id"] == "fedora":
+                entry["label"] = current_label.strip()
+                break
     return {
         "current": raw.get("current") if raw.get("current") in ("fedora", "android") else None,
         "sets": sets,

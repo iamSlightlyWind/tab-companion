@@ -21,6 +21,7 @@ from .zram import (
 from .thermal_limit import MAX_THRESHOLD_C, MIN_THRESHOLD_C, read_settings, read_status
 from .power_profile_tuning import read_settings as read_power_tuning_settings
 from .browser_memory import (
+    SUPPORTED_BROWSERS,
     MAX_LIMIT_DECI_GB,
     MIN_LIMIT_DECI_GB,
     read_settings as read_browser_settings,
@@ -226,20 +227,31 @@ class PowerProfilesPage(Adw.PreferencesPage):
             self.browser_memory_group = Adw.PreferencesGroup(
                 title=_("Browser RAM limit"),
                 description=_(
-                    "Limit native Firefox RAM use. Flatpak browsers are unsupported. "
-                    "To request another browser, open an issue or contribute a pull request. "
+                    "Limit native Firefox or Brave RAM use. Flatpak browsers are unsupported. "
                     "A hard limit can cause browser tabs to crash if they need more memory."
                 ),
             )
+            browser_names = [_("Firefox"), _("Brave")]
+            self.browser_memory_browser_row = Adw.ComboRow(
+                title=_("Browser"),
+                model=Gtk.StringList.new(browser_names),
+            )
+            self.browser_memory_browser_row.set_selected(
+                SUPPORTED_BROWSERS.index(self._browser_saved["browser"])
+            )
+            self.browser_memory_browser_row.connect(
+                "notify::selected", self._browser_memory_value_changed
+            )
+            self.browser_memory_group.add(self.browser_memory_browser_row)
             self.browser_memory_enabled_row = Adw.SwitchRow(
-                title=_("Limit Firefox memory"),
-                subtitle=_("Applies to all current and future native Firefox sessions; Flatpak is excluded."),
+                title=_("Limit selected browser memory"),
+                subtitle=_("Applies to all current and future native sessions; Flatpak is excluded."),
             )
             self.browser_memory_enabled_row.set_active(self._browser_saved["enabled"])
             self.browser_memory_enabled_row.connect("notify::active", self._browser_memory_value_changed)
             self.browser_memory_group.add(self.browser_memory_enabled_row)
 
-            self.browser_memory_row = Adw.ActionRow(title=_("Maximum Firefox RAM"))
+            self.browser_memory_row = Adw.ActionRow(title=_("Maximum browser RAM"))
             self.browser_memory_adjustment = Gtk.Adjustment.new(
                 self._browser_saved["limit_deci_gb"] / 10,
                 MIN_LIMIT_DECI_GB / 10,
@@ -274,7 +286,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
             self.browser_memory_row.add_suffix(browser_controls)
             self.browser_memory_group.add(self.browser_memory_row)
 
-            self.browser_memory_status_row = Adw.ActionRow(title=_("Firefox limit status"))
+            self.browser_memory_status_row = Adw.ActionRow(title=_("Browser limit status"))
             self.browser_memory_save_button = Gtk.Button(label=_("Apply"), valign=Gtk.Align.CENTER)
             self.browser_memory_save_button.connect("clicked", self._save_browser_memory_settings)
             self.browser_memory_status_row.add_suffix(self.browser_memory_save_button)
@@ -494,6 +506,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
 
     def _browser_memory_selected(self):
         return {
+            "browser": SUPPORTED_BROWSERS[self.browser_memory_browser_row.get_selected()],
             "enabled": self.browser_memory_enabled_row.get_active(),
             "limit_deci_gb": round(self.browser_memory_adjustment.get_value() * 10),
         }
@@ -509,18 +522,21 @@ class PowerProfilesPage(Adw.PreferencesPage):
         if self.browser_memory_group is None:
             return GLib.SOURCE_REMOVE
         status = read_browser_status()
+        browser_id = status.get("browser", self._browser_saved["browser"]) if status else self._browser_saved["browser"]
+        browser_name = _("Firefox") if browser_id == "firefox" else _("Brave")
         if status is None:
-            summary = _("Save to start the per-user Firefox limiter.")
+            summary = _("Save to start the per-user browser limiter.")
         elif status.get("error"):
             summary = str(status["error"])
         elif not status["enabled"]:
-            summary = _("Disabled; Tab Companion-managed Firefox limits are cleared.")
-        elif status["firefox_sessions"] == 0:
-            summary = _("Enabled · waiting for native Firefox; Flatpak is not managed.")
+            summary = _("Disabled; Tab Companion-managed browser limits are cleared.")
+        elif status["browser_sessions"] == 0:
+            summary = _("Enabled · waiting for native {browser}; Flatpak is not managed.").format(browser=browser_name)
         else:
-            summary = _("{applied} of {running} native Firefox session(s) capped at {limit:.1f} GB.").format(
+            summary = _("{applied} of {running} native {browser} session(s) capped at {limit:.1f} GB.").format(
                 applied=status["applied_sessions"],
-                running=status["firefox_sessions"],
+                running=status["browser_sessions"],
+                browser=browser_name,
                 limit=status["limit_deci_gb"] / 10,
             )
         self.browser_memory_status_row.set_subtitle(summary)
@@ -532,7 +548,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
         if selected == self._browser_saved:
             return
         self.browser_memory_save_button.set_sensitive(False)
-        self.browser_memory_status_row.set_subtitle(_("Saving Firefox memory limit…"))
+        self.browser_memory_status_row.set_subtitle(_("Saving browser memory limit…"))
         try:
             self._browser_memory_process = Gio.Subprocess.new(
                 [BROWSER_MEMORY_HELPER, json.dumps(selected, separators=(",", ":"))],
@@ -543,7 +559,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
             )
         except (GLib.Error, OSError):
             self.browser_memory_status_row.set_subtitle(
-                _("Could not start Firefox memory limiter; previous setting remains.")
+                _("Could not start browser memory limiter; previous setting remains.")
             )
             self.browser_memory_save_button.set_sensitive(True)
 
@@ -554,7 +570,7 @@ class PowerProfilesPage(Adw.PreferencesPage):
             success, stdout, stderr = False, "", ""
         if not success or not process.get_successful():
             self.browser_memory_status_row.set_subtitle(
-                (stderr or _("Could not save Firefox memory limit; previous setting remains.")).strip()
+                (stderr or _("Could not save browser memory limit; previous setting remains.")).strip()
             )
             self._browser_memory_value_changed()
             return

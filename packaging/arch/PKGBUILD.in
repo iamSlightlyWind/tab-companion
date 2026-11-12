@@ -13,6 +13,33 @@ sha256sums=('@BUNDLE_SHA256@')
 
 package() {
     tar -xzf "${srcdir}/tab-companion-x810.tar.gz" -C "${pkgdir}"
+    # This file is a host/build-time cache, not package data. The target's
+    # glib2 hook recompiles the XML schema during installation; shipping the
+    # compiled cache makes pacman report a file conflict with that hook.
+    rm -f "${pkgdir}/usr/share/glib-2.0/schemas/gschemas.compiled"
     # Fedora's system-origin record must not falsely label an Arch install.
     rm -f "${pkgdir}/usr/share/tab-companion/port.json"
+
+    # The shared Fedora bundle starts a Mate polkit agent from a Fedora-only
+    # path. GNOME Shell supplies the authentication agent in this package's
+    # target desktop, so do not install that stale autostart entry on Arch.
+    rm -f "${pkgdir}/etc/xdg/autostart/tab-companion-polkit-agent.desktop"
+
+    # Keep the X810 dualboot page and authenticated helpers on Arch too. The
+    # backend maps Arch Linux ARM to the stable `fedora` boot-set ID expected
+    # by the Android-side selector, while displaying Arch's real PRETTY_NAME.
+    for path in \
+        usr/local/libexec/x810-boot-switch-core \
+        usr/local/libexec/tab-companion-boot-status \
+        usr/local/libexec/tab-companion-boot-switch \
+        usr/share/gnome-shell/extensions/dualboot@agcarbajo.github.io/extension.js \
+        usr/share/gnome-shell/extensions/dualboot@agcarbajo.github.io/metadata.json \
+        usr/libexec/tab-companion-admin \
+        usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.Admin.policy \
+        usr/share/polkit-1/actions/io.github.agcarbajo.TabCompanion.X810.policy; do
+        if [[ ! -s "${pkgdir}/${path}" ]]; then
+            printf 'Required Arch X810 dualboot file is missing: %s\n' "$path" >&2
+            return 1
+        fi
+    done
 }

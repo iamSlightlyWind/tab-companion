@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: MIT
-"""Save native Firefox memory-limit settings and start the user agent."""
+"""Save native browser memory-limit settings and start the user agent."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def main(argv: list[str]) -> int:
     try:
         settings = valid_settings(json.loads(argv[0]))
         if settings is None:
-            raise ValueError("Use enabled=true/false and a Firefox memory limit from 1.0–10.0 GB in 0.1 GB steps")
+            raise ValueError("Select Firefox or Brave, set enabled=true/false, and choose a 1.0–10.0 GB limit in 0.1 GB steps")
     except (json.JSONDecodeError, ValueError) as error:
         print(f"Could not save browser memory setting: {error}", file=sys.stderr)
         return 2
@@ -66,11 +66,11 @@ def main(argv: list[str]) -> int:
 
     if settings["enabled"]:
         print(
-            f"Firefox memory cap saved at {settings['limit_deci_gb'] / 10:.1f} GB "
-            "per active and future native Firefox session."
+            f"{settings['browser'].title()} memory cap saved at "
+            f"{settings['limit_deci_gb'] / 10:.1f} GB per active and future native session."
         )
     else:
-        print("Firefox memory cap disabled; limits applied by Tab Companion will be cleared.")
+        print("Browser memory cap disabled; limits applied by Tab Companion will be cleared.")
     return 0
 
 

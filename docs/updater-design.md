@@ -118,6 +118,79 @@ this design: HTTPS to the configured public repo plus the index's package
 hash is the selected trust model. This detects corruption/mismatch, not a
 compromised repository owner or workflow.
 
+## Arch SM-X810 device-support package
+
+The generic port channel also supports an Arch SM-X810 device-support
+package; it does not require a separate kernel updater. The Arch support
+package can publish `x810-device-support` as a normal indexed `pacman-local`
+asset. The installed support package provides `/usr/share/tab-companion/port.json`
+with routing metadata like this (replace the repository URL and workflow
+filename with the actual public build source):
+
+```json
+{
+  "schema_version": 1,
+  "port_id": "x810-device-support",
+  "name": "X810 Arch device support",
+  "repo_url": "https://github.com/OWNER/REPOSITORY",
+  "version": "0.1.0",
+  "device_id": "SM-X810",
+  "os_id": "arch",
+  "arch": "aarch64",
+  "workflow_file": "build-updates.yml",
+  "branch": "main",
+  "artifact_name": "x810-device-support",
+  "public_release": true,
+  "release_tag_prefix": "x810-device-support-build",
+  "build_info_path": "/usr/share/tab-companion/port-build.json"
+}
+```
+
+The workflow publishes `x810-device-support-build-<run_id>` with the public
+asset `x810-device-support.zip`. That ZIP contains the package and the regular
+`tab-companion-update.json` build index. Its relevant fields should be:
+
+```json
+{
+  "schema_version": 1,
+  "project": "x810-device-support",
+  "version": "0.1.0",
+  "run_id": 123456789,
+  "run_number": 42,
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "branch": "main",
+  "assets": [{
+    "name": "x810-device-support-0.1.0-1-any.pkg.tar.zst",
+    "sha256": "<64 lowercase hex characters>",
+    "size": 123456,
+    "format": "pacman-local",
+    "package_name": "x810-device-support",
+    "package_version": "0.1.0-1",
+    "target": {
+      "os_id": "arch",
+      "arch": "aarch64",
+      "device": "SM-X810"
+    }
+  }]
+}
+```
+
+The index `project` must equal the installed `port_id`; its run ID, run number,
+commit, and branch must match the latest successful push run. In the manifest,
+`target.device` is compared with the host's device ID; `device_id` is the
+separate key used by the installed `port.json`. The package itself is
+`arch=('any')`, while the manifest target stays `aarch64` so the feed is only
+offered to the intended ARM64 device. The root installer independently checks
+the package's name, version, and Pacman architecture (`any`) before installing.
+
+This is a package update channel only: the support package must not contain or
+install a kernel, modules, boot images, or partition-writing logic. Tab
+Companion's guarded X810 kernel/boot updater remains Fedora-only. Arch local
+package installation still performs the required `pacman -Syu` before
+`pacman -U`, so other repository-managed system packages may update as part of
+that transaction; this channel does not itself provide or flash a kernel/boot
+update.
+
 ## Full build reset
 
 For an intentional clean-build sanity check, run **Actions → Reset Tab

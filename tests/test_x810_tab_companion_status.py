@@ -65,6 +65,22 @@ class X810TabCompanionStatusTests(unittest.TestCase):
         self.assertTrue(result["sets"][0]["complete"])
         self.assertEqual(result["storage"], {})
 
+    def test_arch_label_replaces_legacy_fedora_slot_label(self):
+        (self.base / "fedora").mkdir()
+        (self.base / "fedora/name.txt").write_text("Fedora\n")
+        backend = {"current": "fedora", "current_label": "Arch Linux ARM",
+                   "ready": {"fedora": True, "android": True}, "errors": {}}
+        result = status.build_status(
+            backend="backend", base=str(self.base),
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=0, stdout=json.dumps(backend), stderr=""),
+            statvfs=lambda _path: (_ for _ in ()).throw(OSError("unused")),
+            check_output=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                FileNotFoundError("unused")),
+        )
+        linux = next(entry for entry in result["sets"] if entry["id"] == "fedora")
+        self.assertEqual(linux["label"], "Arch Linux ARM")
+
     def test_backend_json_error_is_reported_as_readable_diagnostic(self):
         failure = SimpleNamespace(
             returncode=1,

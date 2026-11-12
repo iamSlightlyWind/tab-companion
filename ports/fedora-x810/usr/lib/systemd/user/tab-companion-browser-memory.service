@@ -1,5 +1,5 @@
 [Unit]
-Description=Tab Companion native Firefox memory limit
+Description=Tab Companion native browser memory limit
 After=default.target
 
 [Service]

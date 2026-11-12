@@ -2,7 +2,15 @@
   "uuid": "dualboot@agcarbajo.github.io",
   "name": "Restart into Android",
   "description": "Adds a password-authenticated Restart into Android action to GNOME's power menu.",
-  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ],
   "url": "https://github.com/agcarbajo/ubuntu-galaxy-tab-s9-ultra",
   "version": 1
 }
