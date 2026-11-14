@@ -102,12 +102,21 @@ class PlatformBackend:
             pacman = shutil.which("pacman")
             if not pacman:
                 raise ValueError("pacman is not installed")
-            fields = subprocess.check_output(
-                [pacman, "-Qp", "--print-format", "%n\\n%v\\n%a", str(path)], text=True
-            ).splitlines()
-            if len(fields) != 3:
+            # Arch Linux ARM's pacman may not support --print-format for -Qp.
+            # Query the portable -Qi metadata format instead.
+            output = subprocess.check_output([pacman, "-Qip", str(path)], text=True)
+            fields = {}
+            for line in output.splitlines():
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                fields[key.strip().lower()] = value.strip()
+            name, version, architecture = (
+                fields.get("name"), fields.get("version"), fields.get("architecture")
+            )
+            if not all((name, version, architecture)):
                 raise ValueError("pacman returned malformed package metadata")
-            return tuple(fields)  # type: ignore[return-value]
+            return name, version, architecture
         raise ValueError(f"No package inspector is registered for {package_format}")
 
     def install_package(self, package_format: str, path: Path) -> None:
