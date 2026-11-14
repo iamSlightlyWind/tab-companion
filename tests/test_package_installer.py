@@ -36,7 +36,11 @@ class PackageMetadataTests(unittest.TestCase):
         self._check("deb", "deb", "Package: tab-companion\nVersion: 1.2.0-1\nArchitecture: arm64", "1.2.0-1", "aarch64")
 
     def test_arch_local_package_metadata_matches(self):
-        self._check("pacman", "pacman-local", "tab-companion\n1.2.0-1\nany", "1.2.0-1", "aarch64")
+        self._check(
+            "pacman", "pacman-local",
+            "Name            : tab-companion\nVersion         : 1.2.0-1\nArchitecture     : any\n",
+            "1.2.0-1", "aarch64",
+        )
 
     def test_wrong_release_version_rejected(self):
         with patch("tab_companion.package_installer.detect_backend", return_value=backend_for_manager("rpm")), \
